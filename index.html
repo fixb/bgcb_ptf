@@ -468,7 +468,7 @@ function parsePnlFollowers(rows){
   let hi=-1;
   for(let i=0;i<Math.min(rows.length,12);i++){const r=rows[i];if(r&&str(r[1])==="Strategy"&&str(r[2])==="Book"){hi=i;break}}
   if(hi<0)throw new Error("En-tête PnL (Strategy/Book) introuvable");
-  const seen=new Set(), byDay={}, aumDay={};
+  const seen=new Set(), byDay={}, aumDay={}, detail=[];
   for(let i=hi+1;i<rows.length;i++){
     const r=rows[i];if(!r)continue;
     const st=str(r[1]);
@@ -476,12 +476,13 @@ function parsePnlFollowers(rows){
     const d=num(r[4]);if(d==null)continue;
     const key=(r[3]??r[2])+"|"+d;        // dédoublonnage book|date comme bg_convertible_pnl
     if(seen.has(key))continue;seen.add(key);
-    const ds=d+off;
-    byDay[ds]=(byDay[ds]||0)+(num(r[7])||0);   // Diff Result in Eur
+    const ds=d+off, p=num(r[7])||0;
+    byDay[ds]=(byDay[ds]||0)+p;                // Diff Result in Eur
     const a=num(r[14]);if(a)aumDay[ds]=a;      // FundAuMY
+    detail.push({st,b:str(r[2]),d:ds,p});
   }
   const dates=Object.keys(byDay).map(Number).sort((a,b)=>a-b);
-  return {dates,rets:dates.map(d=>aumDay[d]?byDay[d]/aumDay[d]:0),
+  return {dates,rets:dates.map(d=>aumDay[d]?byDay[d]/aumDay[d]:0),detail,
     aum:dates.length?aumDay[dates[dates.length-1]]||null:null};
 }
 function pnlEstRet(ref){ // perf estimée = Π(1+Σ PnL jour / AuM jour) sur (ref, dernier jour PnL]
@@ -490,6 +491,65 @@ function pnlEstRet(ref){ // perf estimée = Π(1+Σ PnL jour / AuM jour) sur (re
   let l=1;
   for(let i=0;i<E.dates.length;i++)if(E.dates[i]>ref)l*=1+E.rets[i];
   return l-1;
+}
+
+/* ---- over/under performance (§2) : Brinson-Fachler estimé vs Focus régionaux ---- */
+function normTok(s){return str(s).toUpperCase().replace(/[^A-Z0-9]+/g," ").trim()}
+function bookRegion(book,strategy,C){
+  const nb=normTok(book);
+  if(/\b(INDEX US|NDX|NASDAQ|SPX|S P 500|RUSSELL)\b/.test(nb))return"US";
+  if(/\b(SXXR|ESTX|EURO STOXX|INDEX EU|INDEX EUROPE)\b/.test(nb))return"Europe";
+  if(/\b(NKY|NIKKEI|INDEX JP|INDEX JAPAN)\b/.test(nb))return"Japan";
+  if(nb.length>=4)for(const p of [...C.cbs,...C.ovlD]){
+    for(const k of [p.und,p.issuer,p.name]){
+      const nk=normTok(k);
+      if(nk.length>=4&&(nk.includes(nb)||nb.includes(nk)))
+        return recapRegion(p.ix?p.ix.region:p.region);
+    }
+  }
+  const st=normTok(strategy);
+  if(/\bUSA?\b/.test(st))return"US";
+  if(/EUROPE/.test(st))return"Europe";
+  if(/JAPAN/.test(st))return"Japan";
+  if(/ASIA/.test(st))return"Asia ex Japan";
+  return null;
+}
+const OU_REG_IDX={"US":"US Focus EUR-Hedged","Europe":"Europe Focus EUR-Hedged","Japan":"Japan Focus EUR-Hedged",
+  "Asia ex Japan":"Asia Focus EUR-Hedged","Other Markets":"Other Markets EUR-Hedged"};
+function computeOverUnder(C,rc){
+  const E=S.pnlEst;if(!E||!E.detail||!E.detail.length)return null;
+  const T=E.dates[E.dates.length-1];
+  const ref=perfHorizons(T)[3][1];   // rolling week, comme le §2 du classeur hebdo
+  const aum=E.aum||C.aum||1;
+  const byBook={};
+  for(const r of E.detail)if(r.d>ref){
+    const k=r.b+"|"+r.st;
+    (byBook[k]=byBook[k]||{book:r.b,st:r.st,pnl:0}).pnl+=r.p;
+  }
+  const books=Object.values(byBook).map(x=>({...x,contrib:x.pnl/aum})).sort((a,b)=>b.contrib-a.contrib);
+  const estRet=pnlEstRet(ref);
+  let regions=null,bmTot=null,total=null,unexp=null;
+  if(S.perf){
+    const rbet=name=>{const a=perfLevelAt(S.perf,name,ref),v=perfLevelAt(S.perf,name,T);
+      return (a!=null&&a!==0&&v!=null)?v/a-1:null};
+    bmTot=rbet("FTSE Global Focus EUR-Hedged");
+    const contribR={};let unmapped=0;
+    for(const x of books){
+      const reg=bookRegion(x.book,x.st,C);
+      if(reg&&OU_REG_IDX[reg])contribR[reg]=(contribR[reg]||0)+x.contrib;else unmapped+=x.contrib;
+    }
+    const zone={};for(const z of rc.rows)zone[z.k]=z;
+    regions=Object.keys(OU_REG_IDX).map(k=>{
+      const wPf=zone[k]?zone[k].aPf:0, wBm=zone[k]?zone[k].aIx:0, rBm=rbet(OU_REG_IDX[k]);
+      const alloc=(rBm!=null&&bmTot!=null)?(wPf-wBm)*(rBm-bmTot):null;     // (wP−wB)(Rb,r−Rb)
+      const sel=rBm!=null?(contribR[k]||0)-wPf*rBm:null;                   // wP(Rp,r−Rb,r) = contrib − wP·Rb,r
+      return {k,alloc,sel,tot:(alloc!=null&&sel!=null)?alloc+sel:null};
+    });
+    regions.push({k:"Non mappé / central",alloc:0,sel:unmapped,tot:unmapped});
+    total=(estRet!=null&&bmTot!=null)?estRet-bmTot:null;
+    unexp=total!=null?total-regions.reduce((a,z)=>a+(z.tot||0),0):null;
+  }
+  return {ref,T,aum,books,estRet,bmTot,regions,total,unexp};
 }
 const PERF_SERIES={"BGCB P EUR":"BG CB I-EUR","FTSE Glb Focus €-H":"FTSE Global Focus EUR-Hedged",
   "SPX":"SPX","NDX":"NDX","US Focus Parity":"US Focus Hedged Parity (USD)","SXXR":"SXXR","NKY":"NIKKEI",
@@ -839,6 +899,30 @@ function renderRecap(C){
   }else{
     perfHtml='<div class="panel">'+off(1,"Official Performance","non calculable — déposer le data loader avec son onglet « hub in value » (snapshot des niveaux quotidiens), et la PnL Followers pour l'estimé.")+"</div>";
   }
+  const ou=hasEst?computeOverUnder(C,r):null;
+  let ouHtml;
+  if(ou){
+    const sums=ou.regions?ou.regions.reduce((a,z)=>({al:a.al+(z.alloc||0),se:a.se+(z.sel||0),to:a.to+(z.tot||0)}),{al:0,se:0,to:0}):null;
+    const movers=[...ou.books].sort((a,x)=>Math.abs(x.contrib)-Math.abs(a.contrib)).slice(0,12).sort((a,x)=>x.contrib-a.contrib);
+    ouHtml=`<div class="grid2">
+    <div class="panel"><h2>2. Over/Under Performance (estimé Misys) vs benchmark</h2>
+      <div class="note">rolling week du <b>${esc(frDate(ou.ref))}</b> au <b>${esc(frDate(ou.T))}</b> — sur/sous-perf totale
+      <b class="${cls(ou.total)}">${P2(ou.total)}</b> (estimé ${P2(ou.estRet)} − benchmark ${P2(ou.bmTot)}).
+      Attribution Brinson-Fachler vs Focus régionaux EUR-hedged ; mapping book → région par rapprochement avec le risk report (repli : stratégie).</div>
+      ${ou.regions?sT(["Région","Allocation","Sélection","Total"],[
+        ...ou.regions.map(z=>[esc(z.k),{t:P2(z.alloc),cls:cls(z.alloc)},{t:P2(z.sel),cls:cls(z.sel)},{t:P2(z.tot),cls:cls(z.tot)}]),
+        [b("Total effets"),{t:b(P2(sums.al)),cls:cls(sums.al)},{t:b(P2(sums.se)),cls:cls(sums.se)},{t:b(P2(sums.to)),cls:cls(sums.to)}],
+        ["Non expliqué (résidu)",null,null,{t:P2(ou.unexp),cls:"mut"}]])
+      :'<div class="note">hub perf absent — benchmark indisponible, seuls les contributeurs sont affichés.</div>'}
+    </div>
+    <div class="panel"><h2>Sélection — principaux contributeurs de la semaine</h2>
+      <div class="note">PnL du book sur la fenêtre, en % de l'AUM (${fmt.m(ou.aum)}) — top 12 en valeur absolue.</div>
+      ${sT(["Book","Stratégie","Contribution"],movers.map(m=>[esc(m.book||"—"),esc(m.st),{t:P2(m.contrib),cls:cls(m.contrib)}]))}
+    </div>
+  </div>`;
+  }else{
+    ouHtml='<div class="panel">'+off(2,"Over/Under Performance vs Benchmark","non calculable ici — nécessite la PnL Misys (fichier PnL Followers).")+"</div>";
+  }
   $("#s-recap").innerHTML=`
   <div class="panel">
     <h2>Weekly Call BGCB — récapitulatif</h2>
@@ -846,11 +930,7 @@ function renderRecap(C){
     AUM <b>${fmt.m(C.aum)}</b> · cash disponible <b>${P(r.cashAv)}</b> · risk report du <b>${esc(S.rr.date||"…")}</b> · indices du <b>${esc(S.date||"…")}</b>.</div>
   </div>
   ${perfHtml}
-  <div class="panel">
-    ${off(2,"Over/Under Performance vs Benchmark",hasEst
-      ?"PnL Followers chargée — la décomposition allocation/sélection vs benchmark (effets par région, top contributeurs) reste à brancher."
-      :"non calculable ici — nécessite la PnL Misys (fichier PnL Followers).")}
-  </div>
+  ${ouHtml}
   <div class="grid2">
     <div class="panel"><h2>3.1. Allocation équivalente par région vs benchmark</h2>
       <div class="note">CB en valeur d'actif + dérivés en équivalent delta, en % de l'AUM — vs poids FTSE Global Focus. Le détail par stratégie (in CB1 CREDIT…) nécessite le book Misys.</div>
@@ -1206,6 +1286,22 @@ function exportXls(){
     const regs=Object.keys(PERF_REGIONAL);
     push("1b. Focus CB régionaux EUR-hedged (%)",...regs);
     for(const [h,ref] of pfx.HOR)push(h,...regs.map(l=>pv(l,ref)));
+    push();
+  }
+  const oux=S.pnlEst?computeOverUnder(C,rc):null;
+  if(oux){
+    push("2. Over/Under (estimé Misys) vs benchmark — rolling week "+frDate(oux.ref)+" → "+frDate(oux.T));
+    push("Sur/sous-performance totale (%)",oux.total==null?null:R(oux.total*100,3),
+      "estimé",oux.estRet==null?null:R(oux.estRet*100,3),"benchmark",oux.bmTot==null?null:R(oux.bmTot*100,3));
+    if(oux.regions){
+      push("Région","Allocation %","Sélection %","Total %");
+      for(const z of oux.regions)push(z.k,z.alloc==null?null:R(z.alloc*100,3),z.sel==null?null:R(z.sel*100,3),z.tot==null?null:R(z.tot*100,3));
+      push("Non expliqué (résidu)",null,null,oux.unexp==null?null:R(oux.unexp*100,3));
+    }
+    push();
+    push("Principaux contributeurs (PnL semaine, % AUM)","Stratégie","Contribution %");
+    const movers=[...oux.books].sort((a,x)=>Math.abs(x.contrib)-Math.abs(a.contrib)).slice(0,12).sort((a,x)=>x.contrib-a.contrib);
+    for(const m of movers)push(m.book||"—",m.st,R(m.contrib*100,3));
     push();
   }
   push("3.1 Allocation équivalente par région (% AUM, CB en AV + dérivés en équiv. delta)","BGCB","FTSE Global Focus");
