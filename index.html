@@ -139,6 +139,7 @@ svg text{font-family:var(--mono)}
   <div class="chip" id="chip-tr"  data-slot="tr">Data loader (requis)<small>2026_Data_loader.xlsm — transco CBs + hub perf (« hub in value »)</small></div>
   <div class="chip" id="chip-pnl" data-slot="pnl">PnL Followers (optionnel)<small>PnL BGF Followers DDMMYYYY.xlsx — estimé BGCB (feuille BGCB)</small></div>
   <div class="chip" id="chip-rr2" data-slot="rr2">Risk report N-1 (optionnel)<small>un 2ᵉ risk report → trades de la semaine (le plus ancien devient N-1)</small></div>
+  <div class="chip" id="chip-f2" data-slot="f2">0204 N-1 (optionnel)<small>un 2ᵉ UCBINDEX0204 daté → attribution benchmark par constituant</small></div>
   <input type="file" id="fpick" multiple style="display:none" accept=".xls,.xlsx,.xlsm">
   <div id="drop-hint">glisser-déposer les fichiers n'importe où sur la page</div>
 </div>
@@ -376,7 +377,7 @@ function parseBiff8(stream){
 }
 
 /* ======================= modèles de données ======================= */
-const S={rr:null,rr2:null,f:null,g:null,transco:null,perf:null,pnlEst:null,date:null,withOverlay:true,
+const S={rr:null,rr2:null,f:null,fPrev:null,g:null,transco:null,perf:null,pnlEst:null,date:null,withOverlay:true,
   betaCfg:{bench:"Global Focus Hedged Parity (EUR)",win:90,mode:"flat",hl:30}};
 
 function parseFtseRows(rows){
@@ -573,6 +574,52 @@ function drawBeta(){
     <div class="kpi"><div class="lab">Observations</div><div class="val">${r.n}</div></div>
   </div>
   ${r.roll.length>2?'<div class="note">beta glissant — mêmes paramètres, recalculé tous les 5 jours ouvrés :</div>'+betaSpark(r.roll):""}`;
+}
+
+/* ---- attribution benchmark par constituant (§2b) : deux fichiers 0204 datés ---- */
+function prevBusinessDay(serial){let d=serial-1;while([0,6].includes(serialToDate(d).getUTCDay()))d--;return d}
+function assignFtse0204(map,label){
+  const tag=map.sessionDate!=null?" (séance du "+frDate(map.sessionDate)+")":"";
+  if(S.f&&S.f.fileDate!=null&&map.fileDate!=null&&map.fileDate!==S.f.fileDate){
+    if(map.fileDate<S.f.fileDate){S.fPrev=map;mark("f2",label+tag)}
+    else{S.fPrev=S.f;S.f=map;
+      mark("f2","0204 — séance du "+(S.fPrev.sessionDate!=null?frDate(S.fPrev.sessionDate):"?"));
+      mark("f",label+tag)}
+  }else{S.f=map;mark("f",label+tag)}
+}
+function computeIdxAttrib(){
+  if(!(S.f&&S.fPrev))return null;
+  const cur=S.f, prev=S.fPrev;
+  const heldMids=new Set(S.calc?S.calc.cbs.map(p=>p.mid).filter(Boolean):[]);
+  const lines=[],entries=[],exits=[];
+  let tot=0;
+  for(const [mid,v] of cur){
+    const q=prev.get(mid);
+    if(!q){entries.push({issue:v.issue,region:v.region,w:v.weight});continue}
+    const ret=(q.cbPrice&&v.cbPrice)?v.cbPrice/q.cbPrice-1:null;
+    const contrib=ret!=null?(q.weight||0)/100*ret:null;
+    if(contrib!=null)tot+=contrib;
+    lines.push({mid,issue:v.issue,isin:v.isin,region:v.region,held:heldMids.has(mid),
+      wPrev:q.weight||0,wCur:v.weight||0,dW:(v.weight||0)-(q.weight||0),ret,contrib});
+  }
+  for(const [mid,q] of prev)if(!cur.has(mid))exits.push({issue:q.issue,region:q.region,w:q.weight});
+  const byReg={};
+  for(const l of lines)if(l.contrib!=null){const k=recapRegion(l.region);byReg[k]=(byReg[k]||0)+l.contrib}
+  // contributions actives vs BGCB : (poids book − poids indice N-1) × retour de la souche
+  const active=[];
+  if(S.calc&&S.calc.aum){
+    for(const p of S.calc.cbs){
+      const l=p.mid?lines.find(x=>x.mid===p.mid):null;
+      if(!l||l.ret==null)continue;
+      const wPf=p.av/S.calc.aum;
+      active.push({issue:l.issue,isin:l.isin,held:true,wPf,wIx:l.wPrev/100,ret:l.ret,act:(wPf-l.wPrev/100)*l.ret});
+    }
+    for(const l of lines){
+      if(l.ret==null||l.held)continue;
+      active.push({issue:l.issue,isin:l.isin,held:false,wPf:0,wIx:l.wPrev/100,ret:l.ret,act:-l.wPrev/100*l.ret});
+    }
+  }
+  return {from:prev.sessionDate,to:cur.sessionDate,lines,entries,exits,tot,byReg,active};
 }
 
 /* ---- trades de la semaine (§8) : diff entre deux risk reports ---- */
@@ -856,7 +903,7 @@ function ladderRow(who,dist,wd,isPf){
 function render(){
   const C=S.calc;if(!C)return;
   $("#empty").style.display="none";$("#app").style.display="block";$("#exportBtn").style.display="inline-block";
-  $("#asof").innerHTML=S.rr.date?("risk report du <b>"+S.rr.date+"</b> · indices du <b>"+(S.date||"…")+"</b>"):"";
+  $("#asof").innerHTML=S.rr.date?("risk report du <b>"+S.rr.date+"</b> · indices : séance du <b>"+(S.date||"…")+"</b>"):"";
 
   /* ---- KPIs ---- */
   const netPct=C.aum?C.netDeltaCash/C.aum:null, cbPct=C.aum?C.cbDeltaCash/C.aum:null;
@@ -1035,10 +1082,41 @@ function renderRecap(C){
   <div class="panel">
     <h2>Weekly Call BGCB — récapitulatif</h2>
     <div class="note">réplique de l'onglet <i>Summary</i> du classeur hebdo, recalculée depuis le risk report Sophis + indices FTSE + data loader.
-    AUM <b>${fmt.m(C.aum)}</b> · cash disponible <b>${P(r.cashAv)}</b> · risk report du <b>${esc(S.rr.date||"…")}</b> · indices du <b>${esc(S.date||"…")}</b>.</div>
+    AUM <b>${fmt.m(C.aum)}</b> · cash disponible <b>${P(r.cashAv)}</b> · risk report du <b>${esc(S.rr.date||"…")}</b> · indices : séance du <b>${esc(S.date||"…")}</b>.</div>
   </div>
   ${perfHtml}
   ${ouHtml}
+  ${(()=>{const ia=computeIdxAttrib();
+    if(!ia)return '<div class="panel">'+off("2b","Attribution benchmark par constituant","déposer un second fichier UCBINDEX0204 daté (ex. celui de la semaine précédente) — rappel : un fichier généré le jour J couvre la séance du jour ouvré précédent.")+"</div>";
+    const fbp=v=>v==null?"·":(v*1e4).toFixed(0)+" bp";
+    const rHedged=S.perf?(()=>{const a=perfLevelAt(S.perf,"FTSE Global Focus EUR-Hedged",ia.from),v=perfLevelAt(S.perf,"FTSE Global Focus EUR-Hedged",ia.to);return (a&&v!=null)?v/a-1:null})():null;
+    const rPar=S.perf?(()=>{const a=perfLevelAt(S.perf,"Global Focus Hedged Parity (EUR)",ia.from),v=perfLevelAt(S.perf,"Global Focus Hedged Parity (EUR)",ia.to);return (a&&v!=null)?v/a-1:null})():null;
+    const movers=[...ia.lines].filter(l=>l.contrib!=null).sort((a,x)=>Math.abs(x.contrib)-Math.abs(a.contrib)).slice(0,12).sort((a,x)=>x.contrib-a.contrib);
+    const actives=[...ia.active].sort((a,x)=>Math.abs(x.act)-Math.abs(a.act)).slice(0,12).sort((a,x)=>x.act-a.act);
+    const dWs=[...ia.lines].sort((a,x)=>Math.abs(x.dW)-Math.abs(a.dW)).slice(0,3);
+    const regStrip=Object.entries(ia.byReg).sort((a,x)=>x[1]-a[1]).map(([k,v])=>esc(k)+" "+fbp(v)).join(" · ");
+    return `<div class="panel"><h2>2b. Attribution benchmark par constituant — séance du ${esc(frDate(ia.from))} → séance du ${esc(frDate(ia.to))}</h2>
+      <div class="note">diff des deux fichiers 0204 (générés le lendemain de la séance couverte). Benchmark recalculé ligne à ligne Σ poids × Δprix :
+      <b class="${cls(ia.tot)}">${P2(ia.tot)}</b>${rHedged!=null?" — indice hedgé officiel sur la même période : "+P2(rHedged)+(rPar!=null?" · parité : "+P2(rPar):""):""}.
+      Approximation : Δprix en devise locale ≈ retour hedgé (hors portage). Par région : ${regStrip}.</div>
+      <div class="grid2">
+        <div>
+          <h2 style="margin-top:8px">Top contributions à l'indice</h2>
+          ${sT(["Souche","Région","Poids N-1","Δ prix","Contrib."],movers.map(l=>[
+            esc(l.issue)+(l.held?" ◆":"")+' <span style="color:var(--faint);font-size:9px">'+esc(l.isin||"")+"</span>",
+            esc(recapRegion(l.region)),fmt.pctp(l.wPrev,2),{t:P2(l.ret),cls:cls(l.ret)},{t:fbp(l.contrib),cls:cls(l.contrib)}]))}
+        </div>
+        <div>
+          <h2 style="margin-top:8px">Contributions actives vs BGCB — (poids book − poids indice) × Δ prix</h2>
+          ${sT(["Souche","Book","Indice N-1","Δ prix","Contrib. active"],actives.map(a=>[
+            esc(a.issue)+(a.held?" ◆":"")+' <span style="color:var(--faint);font-size:9px">'+esc(a.isin||"")+"</span>",
+            P2(a.wPf),P2(a.wIx),{t:P2(a.ret),cls:cls(a.ret)},{t:fbp(a.act),cls:cls(a.act)}]))}
+        </div>
+      </div>
+      <div class="note" style="margin-top:10px">Indice : ${ia.entries.length} entrée(s)${ia.entries.length?" — "+esc(ia.entries.map(e=>e.issue).slice(0,4).join(", ")):""} ·
+      ${ia.exits.length} sortie(s)${ia.exits.length?" — "+esc(ia.exits.map(e=>e.issue).slice(0,4).join(", ")):""} ·
+      plus gros Δ poids : ${esc(dWs.map(l=>l.issue+" "+fmt.sgn(l.dW,2)+" pt").join(" · "))} · ◆ = souche détenue.</div>
+    </div>`})()}
   <div class="grid2">
     <div class="panel"><h2>3.1. Allocation équivalente par région vs benchmark</h2>
       <div class="note">CB en valeur d'actif + dérivés en équivalent delta, en % de l'AUM — vs poids FTSE Global Focus. Le détail par stratégie (in CB1 CREDIT…) nécessite le book Misys.</div>
@@ -1432,6 +1510,22 @@ function exportXls(){
     for(const m of movers)push(m.book||"—",m.st,R(m.contrib*100,3));
     push();
   }
+  const iax=computeIdxAttrib();
+  if(iax){
+    push("2b. Attribution benchmark par constituant — séance du "+frDate(iax.from)+" → "+frDate(iax.to));
+    push("Benchmark recalculé Σ poids × Δprix (%)",R(iax.tot*100,3));
+    push("Souche","ISIN","Région","Détenue","Poids N-1 %","Poids N %","Δ prix %","Contribution bp");
+    for(const l of [...iax.lines].filter(x=>x.contrib!=null).sort((a,x)=>Math.abs(x.contrib)-Math.abs(a.contrib)))
+      push(l.issue,l.isin||"",recapRegion(l.region),l.held?"oui":"",R(l.wPrev,3),R(l.wCur,3),R(l.ret*100,2),R(l.contrib*1e4,1));
+    push();
+    push("Contributions actives vs BGCB","Book %","Indice N-1 %","Δ prix %","Active bp");
+    for(const a of [...iax.active].sort((a,x)=>Math.abs(x.act)-Math.abs(a.act)).slice(0,40))
+      push(a.issue+(a.held?" (détenue)":""),R(a.wPf*100,2),R(a.wIx*100,2),R(a.ret*100,2),R(a.act*1e4,1));
+    push();
+    if(iax.entries.length)push("Entrées indice",...iax.entries.map(e=>e.issue));
+    if(iax.exits.length)push("Sorties indice",...iax.exits.map(e=>e.issue));
+    push();
+  }
   push("3.1 Allocation équivalente par région (% AUM, CB en AV + dérivés en équiv. delta)","BGCB","FTSE Global Focus");
   for(const z of rc.rows)push(z.k,R(z.aPf*100,1),R(z.aIx*100,1));
   push("Total",R(rc.tot.aPf*100,1),R(rc.tot.aIx*100,1));
@@ -1541,8 +1635,14 @@ async function handleFile(file){
   const name=file.name.toLowerCase();
   const buf=await file.arrayBuffer();
   try{
-    if(/ucbindex0204/.test(name)){S.f=parseFtseRows(parseBiff8(ole2Stream(buf,["Workbook","Book"])));mark("f",file.name);extractDate(name)}
-    else if(/ucbindex0001/.test(name)){S.g=parseFtseRows(parseBiff8(ole2Stream(buf,["Workbook","Book"])));mark("g",file.name);extractDate(name)}
+    if(/ucbindex0204/.test(name)){
+      const map=parseFtseRows(parseBiff8(ole2Stream(buf,["Workbook","Book"])));
+      const m=name.match(/(\d{4})(\d{2})(\d{2})/);  // date de génération, en préfixe ou en suffixe
+      if(m){map.fileDate=dateToSerial(new Date(Date.UTC(+m[1],+m[2]-1,+m[3])));map.sessionDate=prevBusinessDay(map.fileDate)}
+      assignFtse0204(map,file.name);
+      extractDate(name,true);
+    }
+    else if(/ucbindex0001/.test(name)){S.g=parseFtseRows(parseBiff8(ole2Stream(buf,["Workbook","Book"])));mark("g",file.name);extractDate(name,false)}
     else if(/pnl/.test(name)&&name.endsWith(".xlsx")){
       const E=parsePnlFollowers(await readXlsxSheet(buf,"BGCB"));
       S.pnlEst=E;mark("pnl",file.name+" ("+E.dates.length+" jours, jusqu'au "+frDate(E.dates[E.dates.length-1])+")");
@@ -1571,7 +1671,11 @@ async function handleFile(file){
   }catch(e){console.error(e);markErr(file.name,e.message)}
   build();
 }
-function extractDate(name){const m=name.match(/_(\d{4})(\d{2})(\d{2})/);if(m)S.date=m[3]+"/"+m[2]+"/"+m[1]}
+function extractDate(name,primary){ // fichier généré le jour J → données de la séance du jour ouvré précédent
+  const m=name.match(/(\d{4})(\d{2})(\d{2})/);if(!m)return;
+  if(!primary&&S.date)return; // le 0204 fait foi
+  S.date=frDate(prevBusinessDay(dateToSerial(new Date(Date.UTC(+m[1],+m[2]-1,+m[3])))));
+}
 function mark(slot,label){const c=$("#chip-"+slot);c.classList.add("ok");c.classList.remove("err");
   c.innerHTML=c.innerHTML.replace(/<small>.*<\/small>/,"<small>"+esc(label)+"</small>")}
 function markErr(label,msg){const hint=$("#drop-hint");hint.textContent="Erreur sur "+label+" : "+msg;hint.style.color="var(--red)"}
