@@ -136,7 +136,7 @@ svg text{font-family:var(--mono)}
   <div class="chip" id="chip-rr"  data-slot="rr">Risk report (.xlsx)<small>20YYMMDD_-_BGCB_Risk_Report…</small></div>
   <div class="chip" id="chip-f"   data-slot="f">FTSE Global Focus (.xls)<small>UCBINDEX0204-CD_…</small></div>
   <div class="chip" id="chip-g"   data-slot="g">FTSE Global (.xls)<small>UCBINDEX0001-CD_…</small></div>
-  <div class="chip" id="chip-tr"  data-slot="tr">Transco (requis)<small>2026_Data_loader.xlsm — onglet CBs (MACE ID ↔ nom Mysis)</small></div>
+  <div class="chip" id="chip-tr"  data-slot="tr">Data loader (requis)<small>2026_Data_loader.xlsm — transco CBs + hub perf (« hub in value »)</small></div>
   <input type="file" id="fpick" multiple style="display:none" accept=".xls,.xlsx,.xlsm">
   <div id="drop-hint">glisser-déposer les fichiers n'importe où sur la page</div>
 </div>
@@ -372,7 +372,7 @@ function parseBiff8(stream){
 }
 
 /* ======================= modèles de données ======================= */
-const S={rr:null,f:null,g:null,transco:null,date:null,withOverlay:true};
+const S={rr:null,f:null,g:null,transco:null,perf:null,date:null,withOverlay:true};
 
 function parseFtseRows(rows){
   let hi=-1;
@@ -414,6 +414,62 @@ function parseRiskReport(rows){
     (p.bucket==="Long only"?cbs:ovl).push(p);
   }
   return {cbs,ovl,date:dt};
+}
+
+/* ---- hub de performance (onglet « hub in value » du data loader) ---- */
+function parsePerfHub(rows){
+  const names=rows[2]||[];           // ligne 3 : noms de séries
+  const colName={};
+  for(let c=1;c<names.length;c++){const n=str(names[c]);if(n)colName[c]=n}
+  const dates=[],series={};
+  for(const n of Object.values(colName))series[n]=[];
+  for(let i=5;i<rows.length;i++){    // données à partir de la ligne 6
+    const r=rows[i];if(!r)continue;
+    const d=num(r[0]);if(d==null)continue;
+    dates.push(d);
+    for(const c in colName)series[colName[c]].push(num(r[c]));
+  }
+  return {dates,series};
+}
+function serialToDate(s){return new Date(Date.UTC(1899,11,30)+s*86400000)}
+function dateToSerial(d){return Math.round((d.getTime()-Date.UTC(1899,11,30))/86400000)}
+function perfLevelAt(P,name,target){ // dernier niveau non nul à date ≤ cible (équiv. XLOOKUP -1)
+  const s=P.series[name];if(!s)return null;
+  let lo=0,hi=P.dates.length-1,idx=-1;
+  while(lo<=hi){const m=(lo+hi)>>1;if(P.dates[m]<=target){idx=m;lo=m+1}else hi=m-1}
+  for(let i=idx;i>=0;i--)if(s[i]!=null)return s[i];
+  return null;
+}
+function computePerf(){
+  const P=S.perf;if(!P||!P.dates.length)return null;
+  const T=P.dates[P.dates.length-1], dT=serialToDate(T);
+  const y=dT.getUTCFullYear(),m=dT.getUTCMonth();
+  const HOR=[
+    ["YTD",dateToSerial(new Date(Date.UTC(y-1,11,31)))],
+    ["Rolling Month",dateToSerial(new Date(Date.UTC(y,m-1,dT.getUTCDate())))],
+    ["MTD",dateToSerial(new Date(Date.UTC(y,m,0)))],
+    ["WTD / Rolling Week",T-((((dT.getUTCDay()-5+7)%7)||7))], // depuis le vendredi précédent
+  ];
+  const ret=(name,ref)=>{const a=perfLevelAt(P,name,ref),b=perfLevelAt(P,name,T);
+    return (a!=null&&a!==0&&b!=null)?b/a-1:null};
+  const asof=("0"+dT.getUTCDate()).slice(-2)+"/"+("0"+(m+1)).slice(-2)+"/"+y;
+  return {T,asof,HOR,ret};
+}
+const PERF_SERIES={"BGCB P EUR":"BG CB I-EUR","FTSE Glb Focus €-H":"FTSE Global Focus EUR-Hedged",
+  "SPX":"SPX","NDX":"NDX","US Focus Parity":"US Focus Hedged Parity (USD)","SXXR":"SXXR","NKY":"NIKKEI",
+  "Russell 2000":"RUSSELL 2000","Glb Focus Parity":"Global Focus Hedged Parity (EUR)",
+  "DWS":"DWS GLOBAL CB EUR-Hedged","Lazard":"LAZARD GLOBAL CB EUR-Hedged",
+  "Lombard Odier":"LODH GLOBAL CB EUR-Hedged","UBS":"UBS GLOBAL CB EUR-Hedged"};
+const PERF_COMPS=["DWS","Lazard","Lombard Odier","UBS"];
+const PERF_REGIONAL={"US Focus €-H":"US Focus EUR-Hedged","Europe Focus €-H":"Europe Focus EUR-Hedged",
+  "Japan Focus €-H":"Japan Focus EUR-Hedged","Asia Focus €-H":"Asia Focus EUR-Hedged",
+  "Other Mkts €-H":"Other Markets EUR-Hedged","MSCI World":"MSCI World"};
+function perfValue(pf,label,ref){
+  if(label==="Moy. concurrents"){
+    const vs=PERF_COMPS.map(k=>pf.ret(PERF_SERIES[k],ref)).filter(v=>v!=null);
+    return vs.length?vs.reduce((a,b)=>a+b,0)/vs.length:null;
+  }
+  return pf.ret(PERF_SERIES[label]||PERF_REGIONAL[label],ref);
 }
 
 /* ======================= moteur d'analyse ======================= */
@@ -717,15 +773,35 @@ function renderRecap(C){
   };
   const b=t=>"<b>"+t+"</b>";
   const off=(num,lab,why)=>'<div><h2 style="color:var(--mut)">'+num+". "+lab+'</h2><div class="note" style="margin-bottom:0">'+why+"</div></div>";
+  const pf=computePerf();
+  let perfHtml;
+  if(pf){
+    const cols=["","BGCB P EUR","FTSE Glb Focus €-H","SPX","NDX","US Focus Parity","SXXR","NKY","Russell 2000","Glb Focus Parity","Moy. concurrents",...PERF_COMPS];
+    const rowFor=labels=>pf.HOR.map(([h,ref])=>[h,...labels.map(l=>{
+      const v=perfValue(pf,l,ref);
+      return {t:l==="BGCB P EUR"?"<b>"+P(v)+"</b>":P(v),cls:cls(v)};
+    })]);
+    perfHtml=`<div class="panel"><h2>1. Official Performance</h2>
+      <div class="note">niveaux quotidiens du data loader (snapshot du <b>${esc(pf.asof)}</b>), lookup à la dernière date disponible ≤ cible.
+      WTD = depuis le vendredi précédent (= rolling week quand on calcule un vendredi). NAV des concurrents parfois publiées en retard → dernière valeur connue.</div>
+      ${sT(cols,rowFor(cols.slice(1)))}
+      <h2 style="margin-top:16px">1b. Focus CB régionaux EUR-hedged &amp; MSCI World</h2>
+      ${sT(["",...Object.keys(PERF_REGIONAL)],pf.HOR.map(([h,ref])=>[h,...Object.keys(PERF_REGIONAL).map(l=>{
+        const v=perfValue(pf,l,ref);return {t:P(v),cls:cls(v)};
+      })]))}
+    </div>`;
+  }else{
+    perfHtml='<div class="panel">'+off(1,"Official Performance","non calculable — déposer le data loader avec son onglet « hub in value » (snapshot des niveaux quotidiens).")+"</div>";
+  }
   $("#s-recap").innerHTML=`
   <div class="panel">
     <h2>Weekly Call BGCB — récapitulatif</h2>
-    <div class="note">réplique de l'onglet <i>Summary</i> du classeur hebdo, recalculée depuis le risk report Sophis + indices FTSE.
+    <div class="note">réplique de l'onglet <i>Summary</i> du classeur hebdo, recalculée depuis le risk report Sophis + indices FTSE + data loader.
     AUM <b>${fmt.m(C.aum)}</b> · cash disponible <b>${P(r.cashAv)}</b> · risk report du <b>${esc(S.rr.date||"…")}</b> · indices du <b>${esc(S.date||"…")}</b>.</div>
-    <div class="grid2">
-      ${off(1,"Official Performance","non calculable ici — séries de prix absentes des fichiers chargés (source : fichier perf Bloomberg / hub Performance).")}
-      ${off(2,"Over/Under Performance vs Benchmark","non calculable ici — nécessite la PnL Misys (fichier PnL Followers).")}
-    </div>
+  </div>
+  ${perfHtml}
+  <div class="panel">
+    ${off(2,"Over/Under Performance vs Benchmark","non calculable ici — nécessite la PnL Misys (fichier PnL Followers).")}
   </div>
   <div class="grid2">
     <div class="panel"><h2>3.1. Allocation équivalente par région vs benchmark</h2>
@@ -1072,6 +1148,18 @@ function exportXls(){
   push("Fund AUMs (€)",R(C.aum,0));
   push("Cash disponible (% AUM)",R(rc.cashAv*100,1));
   push();
+  const pfx=computePerf();
+  if(pfx){
+    const labs=["BGCB P EUR","FTSE Glb Focus €-H","SPX","NDX","US Focus Parity","SXXR","NKY","Russell 2000","Glb Focus Parity","Moy. concurrents",...PERF_COMPS];
+    const pv=(l,ref)=>{const v=perfValue(pfx,l,ref);return v==null?null:R(v*100,2)};
+    push("1. Official Performance (%, niveaux du "+pfx.asof+")",...labs);
+    for(const [h,ref] of pfx.HOR)push(h,...labs.map(l=>pv(l,ref)));
+    push();
+    const regs=Object.keys(PERF_REGIONAL);
+    push("1b. Focus CB régionaux EUR-hedged (%)",...regs);
+    for(const [h,ref] of pfx.HOR)push(h,...regs.map(l=>pv(l,ref)));
+    push();
+  }
   push("3.1 Allocation équivalente par région (% AUM, CB en AV + dérivés en équiv. delta)","BGCB","FTSE Global Focus");
   for(const z of rc.rows)push(z.k,R(z.aPf*100,1),R(z.aIx*100,1));
   push("Total",R(rc.tot.aPf*100,1),R(rc.tot.aIx*100,1));
@@ -1175,7 +1263,12 @@ async function handleFile(file){
     else if(name.endsWith(".xlsm")){
       const rows=await readXlsxSheet(buf,"CBs"); const t={};
       for(let i=1;i<rows.length;i++){const r=rows[i];if(r&&r[0]!=null&&r[1]!=null)t[String(r[1]).trim()]=String(Math.round(+r[0]))}
-      if(Object.keys(t).length){S.transco=t;mark("tr",file.name+" ("+Object.keys(t).length+" lignes)")}
+      let perfInfo="";
+      try{
+        const P=parsePerfHub(await readXlsxSheet(buf,"hub in value"));
+        if(P.dates.length){S.perf=P;perfInfo=" · hub perf "+P.dates.length+" dates"}
+      }catch(e){/* pas d'onglet « hub in value » dans ce fichier */}
+      if(Object.keys(t).length){S.transco=t;mark("tr",file.name+" ("+Object.keys(t).length+" lignes"+perfInfo+")")}
     }
     else if(name.endsWith(".xls")){ // UCBINDEX renommé ? tenter par contenu
       const rows=parseFtseRows(parseBiff8(ole2Stream(buf,["Workbook","Book"])));
