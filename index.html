@@ -86,6 +86,7 @@ td .tag{display:inline-block;font-size:9.5px;padding:1px 6px;border-radius:3px;l
 .tag.opt{background:rgba(157,123,239,.18);color:var(--violet)}
 .tag.fut{background:rgba(237,92,118,.18);color:var(--red)}
 .tag.cash{background:rgba(130,146,178,.18);color:var(--mut)}
+.tag.warn{background:rgba(255,185,56,.18);color:var(--amber)}
 
 /* ---------- charts ---------- */
 svg text{font-family:var(--mono)}
@@ -127,19 +128,19 @@ svg text{font-family:var(--mono)}
 
 <header>
   <div class="brand">BG&nbsp;CB <b>/</b> INDEX COMPARE</div>
-  <div class="sub">portefeuille vs FTSE Global Focus (0204) &amp; FTSE Global (0001)</div>
+  <div class="sub">portefeuille vs FTSE Global Focus Index &amp; FTSE Global Index</div>
   <div class="asof" id="asof"></div>
   <button id="exportBtn" title="Exporter toutes les vues en classeur Excel">⤓ Export XLS</button>
 </header>
 
 <div id="filebar">
   <div class="chip" id="chip-rr"  data-slot="rr">Risk report (.xlsx)<small>20YYMMDD_-_BGCB_Risk_Report…</small></div>
-  <div class="chip" id="chip-f"   data-slot="f">FTSE Global Focus (.xls)<small>UCBINDEX0204-CD_…</small></div>
-  <div class="chip" id="chip-g"   data-slot="g">FTSE Global (.xls)<small>UCBINDEX0001-CD_…</small></div>
+  <div class="chip" id="chip-f"   data-slot="f">FTSE Global Focus Index (.xls)<small>UCBINDEX0204-CD_…</small></div>
+  <div class="chip" id="chip-g"   data-slot="g">FTSE Global Index (.xls)<small>UCBINDEX0001-CD_…</small></div>
   <div class="chip" id="chip-tr"  data-slot="tr">Data loader (requis)<small>2026_Data_loader.xlsm — transco CBs + hub perf (« hub in value »)</small></div>
   <div class="chip" id="chip-pnl" data-slot="pnl">PnL Followers (optionnel)<small>PnL BGF Followers DDMMYYYY.xlsx — estimé BGCB (feuille BGCB)</small></div>
   <div class="chip" id="chip-rr2" data-slot="rr2">Risk report N-1 (optionnel)<small>un 2ᵉ risk report → trades de la semaine (le plus ancien devient N-1)</small></div>
-  <div class="chip" id="chip-f2" data-slot="f2">0204 N-1 (optionnel)<small>un 2ᵉ UCBINDEX0204 daté → attribution benchmark par constituant</small></div>
+  <div class="chip" id="chip-f2" data-slot="f2">Global Focus N-1 (optionnel)<small>un 2ᵉ UCBINDEX0204 daté → attribution benchmark par constituant</small></div>
   <input type="file" id="fpick" multiple style="display:none" accept=".xls,.xlsx,.xlsm">
   <div id="drop-hint">glisser-déposer les fichiers n'importe où sur la page</div>
 </div>
@@ -583,7 +584,7 @@ function assignFtse0204(map,label){
   if(S.f&&S.f.fileDate!=null&&map.fileDate!=null&&map.fileDate!==S.f.fileDate){
     if(map.fileDate<S.f.fileDate){S.fPrev=map;mark("f2",label+tag)}
     else{S.fPrev=S.f;S.f=map;
-      mark("f2","0204 — séance du "+(S.fPrev.sessionDate!=null?frDate(S.fPrev.sessionDate):"?"));
+      mark("f2","Global Focus — séance du "+(S.fPrev.sessionDate!=null?frDate(S.fPrev.sessionDate):"?"));
       mark("f",label+tag)}
   }else{S.f=map;mark("f",label+tag)}
 }
@@ -737,7 +738,7 @@ function build(){
     p.gx=p.mid?S.g.get(p.mid)||null:null;
     p.ix=p.fx||p.gx;
     p.w=p.av/totAv;
-    p.status=p.fx?"focus":(p.gx?"broad":"off");
+    p.status=!p.mid?"notr":(p.fx?"focus":(p.gx?"broad":"off"));
     p.sensiS=p.av?p.pureDelta/p.av:null; // sensi action Sophis
     p.sensiF=p.ix&&p.ix.delta!=null&&p.ix.parity&&p.ix.cbPrice?p.ix.delta/100*p.ix.parity/p.ix.cbPrice:null;
   }
@@ -750,6 +751,7 @@ function build(){
     nFocus:cbs.filter(p=>p.status==="focus").length,
     nBroad:cbs.filter(p=>p.status==="broad").length,
     nOff:cbs.filter(p=>p.status==="off").length,
+    noTransco:cbs.filter(p=>p.status==="notr").map(p=>p.name),
     overlapW:cbs.reduce((a,p)=>a+(p.fx?(p.fx.weight||0):0),0),
     delta:wavg(cbs,p=>p.ix?p.ix.delta:null,p=>p.w),
     premium:wavg(cbs,p=>p.ix?p.ix.premium:null,p=>p.w),
@@ -787,7 +789,7 @@ const fmt={
   sgn:(v,d=2)=>v==null?"·":(v>0?"+":"")+v.toFixed(d),
 };
 function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}
-function tagFor(st){return st==="focus"?'<span class="tag focus">0204</span>':st==="broad"?'<span class="tag broad">0001</span>':'<span class="tag off">HORS INDICE</span>'}
+function tagFor(st){return st==="focus"?'<span class="tag focus">FOCUS</span>':st==="broad"?'<span class="tag broad">GLOBAL</span>':st==="notr"?'<span class="tag warn">TRANSCO ?</span>':'<span class="tag off">HORS INDICE</span>'}
 function cls(v){return v>0.0001?"pos":v<-0.0001?"neg":""}
 
 function makeTable(cols, rows, opts={}){
@@ -909,18 +911,18 @@ function render(){
   const netPct=C.aum?C.netDeltaCash/C.aum:null, cbPct=C.aum?C.cbDeltaCash/C.aum:null;
   $("#kpis").innerHTML=[
     {l:"AUM / poche CB",v:fmt.m(C.aum)+" <small>/ "+fmt.m(C.totAv)+"</small>"},
-    {l:"Souches CB",v:C.pf.n+" <small>("+C.pf.nFocus+" Focus · "+C.pf.nBroad+" 0001 · "+C.pf.nOff+" hors)</small>"},
-    {l:"Active share vs 0204",v:fmt.pctp(C.pf.activeShare,0),hero:1,cmp:"poids indice détenus : "+fmt.pctp(C.pf.overlapW)},
-    {l:"Delta pondéré (FTSE)",v:fmt.n(C.pf.delta),cmp:"0204 : <b>"+fmt.n(C.fStat.delta)+"</b> · 0001 : "+fmt.n(C.gStat.delta)},
-    {l:"Prime pondérée",v:fmt.pctp(C.pf.premium),cmp:"0204 : <b>"+fmt.pctp(C.fStat.premium)+"</b>"},
-    {l:"Spread pondéré",v:fmt.bp(C.pf.spread),cmp:"0204 : <b>"+fmt.bp(C.fStat.spread)+"</b>"},
+    {l:"Souches CB",v:C.pf.n+" <small>("+C.pf.nFocus+" Focus · "+C.pf.nBroad+" Global · "+C.pf.nOff+" hors"+(C.pf.noTransco.length?' · <span style="color:var(--amber)">'+C.pf.noTransco.length+" sans transco</span>":"")+")</small>"},
+    {l:"Active share vs Global Focus",v:fmt.pctp(C.pf.activeShare,0),hero:1,cmp:"poids indice détenus : "+fmt.pctp(C.pf.overlapW)},
+    {l:"Delta pondéré (FTSE)",v:fmt.n(C.pf.delta),cmp:"Global Focus : <b>"+fmt.n(C.fStat.delta)+"</b> · Global : "+fmt.n(C.gStat.delta)},
+    {l:"Prime pondérée",v:fmt.pctp(C.pf.premium),cmp:"Global Focus : <b>"+fmt.pctp(C.fStat.premium)+"</b>"},
+    {l:"Spread pondéré",v:fmt.bp(C.pf.spread),cmp:"Global Focus : <b>"+fmt.bp(C.fStat.spread)+"</b>"},
     {l:"Expo action nette"+(S.withOverlay?" (avec overlay)":" (CB seuls)"),v:fmt.pct(S.withOverlay?netPct:cbPct,1),hero:1,
      cmp:"CB : "+fmt.pct(cbPct)+" · overlay : "+fmt.sgn(C.ovlDeltaCash/C.aum*100,1)+" pts"},
   ].map(k=>'<div class="kpi'+(k.hero?" hero":"")+'"><div class="lab">'+k.l+'</div><div class="val">'+k.v+'</div>'+(k.cmp?'<div class="cmp">'+k.cmp+"</div>":"")+"</div>").join("");
 
   /* ---- tabs ---- */
   const TABS=[["recap","Récap hebdo"],["overview","Vue d'ensemble"],["weights","Poids actifs"],["convex","Convexité"],["credit","Crédit"],
-              ["alloc","Allocation"],["universe","Gisement 0001"],["recon","Recon delta"],["overlay","Overlay dérivés"]];
+              ["alloc","Allocation"],["universe","Gisement Global"],["recon","Recon delta"],["overlay","Overlay dérivés"]];
   if(!$("#tabs").innerHTML){
     $("#tabs").innerHTML=TABS.map(([k,l],i)=>'<button data-t="'+k+'" class="'+(i===0?"on":"")+'">'+l+"</button>").join("");
     $("#tabs").addEventListener("click",e=>{
@@ -1083,6 +1085,7 @@ function renderRecap(C){
     <h2>Weekly Call BGCB — récapitulatif</h2>
     <div class="note">réplique de l'onglet <i>Summary</i> du classeur hebdo, recalculée depuis le risk report Sophis + indices FTSE + data loader.
     AUM <b>${fmt.m(C.aum)}</b> · cash disponible <b>${P(r.cashAv)}</b> · risk report du <b>${esc(S.rr.date||"…")}</b> · indices : séance du <b>${esc(S.date||"…")}</b>.</div>
+    ${C.pf.noTransco.length?'<div class="note" style="color:var(--amber);margin-bottom:0">⚠ Transco MACE ID ↔ nom Mysis manquante pour '+C.pf.noTransco.length+' souche(s) : <b>'+esc(C.pf.noTransco.join(", "))+"</b> — à ajouter dans l'onglet CBs du data loader (ces souches sont traitées comme hors indices dans tous les calculs).</div>":""}
   </div>
   ${perfHtml}
   ${ouHtml}
@@ -1096,7 +1099,7 @@ function renderRecap(C){
     const dWs=[...ia.lines].sort((a,x)=>Math.abs(x.dW)-Math.abs(a.dW)).slice(0,3);
     const regStrip=Object.entries(ia.byReg).sort((a,x)=>x[1]-a[1]).map(([k,v])=>esc(k)+" "+fbp(v)).join(" · ");
     return `<div class="panel"><h2>2b. Attribution benchmark par constituant — séance du ${esc(frDate(ia.from))} → séance du ${esc(frDate(ia.to))}</h2>
-      <div class="note">diff des deux fichiers 0204 (générés le lendemain de la séance couverte). Benchmark recalculé ligne à ligne Σ poids × Δprix :
+      <div class="note">diff des deux fichiers Global Focus (générés le lendemain de la séance couverte). Benchmark recalculé ligne à ligne Σ poids × Δprix :
       <b class="${cls(ia.tot)}">${P2(ia.tot)}</b>${rHedged!=null?" — indice hedgé officiel sur la même période : "+P2(rHedged)+(rPar!=null?" · parité : "+P2(rPar):""):""}.
       Approximation : Δprix en devise locale ≈ retour hedgé (hors portage). Par région : ${regStrip}.</div>
       <div class="grid2">
@@ -1200,20 +1203,20 @@ function renderOverview(C){
     <h2>Échelle de convexité — répartition pondérée par bucket de delta</h2>
     <div class="note">part du book (resp. de l'indice) dans chaque tranche de delta FTSE — la convexité maximale vit dans la zone 20–60.</div>
     ${ladderRow("BG CB",dPf,C.pf.delta,true)}
-    ${ladderRow("Focus 0204",dF,C.fStat.delta,false)}
-    ${ladderRow("Global 0001",dG,C.gStat.delta,false)}
+    ${ladderRow("Global Focus",dF,C.fStat.delta,false)}
+    ${ladderRow("Global",dG,C.gStat.delta,false)}
     <div class="ladder-axis"><div></div><div><span>delta 0</span><span>20</span><span>40</span><span>60</span><span>80</span><span>100</span></div><div></div></div>
     <div class="legend" style="margin-top:10px">${BUCKETS.map(b=>'<span><i style="background:'+b.c+'"></i>'+b.k+"</span>").join("")}</div>
   </div>
   <div class="grid2">
-    <div class="panel"><h2>Principales surpondérations actives</h2><div class="note">poids portefeuille − poids 0204, en points de %</div>
+    <div class="panel"><h2>Principales surpondérations actives</h2><div class="note">poids portefeuille − poids Global Focus, en points de %</div>
       ${hBars(top.map(p=>({label:p.name.slice(0,26),v:(p.w-(p.fx?p.fx.weight/100:0))*100,color:"#FFB938"})),620,24,v=>fmt.sgn(v,2)+" pt")}</div>
     <div class="panel"><h2>Stats croisées</h2>
       ${makeTable([
         {k:"m",label:"Métrique pondérée"},
         {k:"pf",label:"BG CB",fmt:v=>v},
-        {k:"f",label:"Focus 0204",fmt:v=>v},
-        {k:"g",label:"Global 0001",fmt:v=>v}],
+        {k:"f",label:"FTSE Global Focus Index",fmt:v=>v},
+        {k:"g",label:"FTSE Global Index",fmt:v=>v}],
         [
         {m:"Delta",pf:fmt.n(C.pf.delta),f:fmt.n(C.fStat.delta),g:fmt.n(C.gStat.delta)},
         {m:"Prime de conversion",pf:fmt.pctp(C.pf.premium),f:fmt.pctp(C.fStat.premium),g:fmt.pctp(C.gStat.premium)},
@@ -1232,16 +1235,17 @@ function renderWeights(C){
     act:p.w*100-(p.fx?p.fx.weight:0), delta:p.ix?p.ix.delta:null,
     prem:p.ix?p.ix.premium:null, spr:p.ix?p.ix.spread:null, av:p.av, pctAum:p.pctAum*100}));
   $("#s-weights").innerHTML=`
-  <div class="panel"><h2>Poids actifs vs FTSE Global Focus 0204</h2>
-  <div class="note">${C.pf.nOff?C.pf.nOff+" souche(s) totalement hors indices — vérifier la transco ou souche réellement hors gisement.":"Toutes les souches sont réconciliées par MACE ID."}
-  Les souches « 0001 » sont hors benchmark mais dans le Global — poids actif = poids portefeuille entier.</div>
+  <div class="panel"><h2>Poids actifs vs FTSE Global Focus Index</h2>
+  <div class="note">${C.pf.noTransco.length?'<span style="color:var(--amber)">⚠ Transco manquante pour '+C.pf.noTransco.length+" souche(s) : <b>"+esc(C.pf.noTransco.join(", "))+"</b> — ajouter la ligne MACE ID ↔ nom Mysis dans l'onglet CBs du data loader.</span> ":""}
+  ${C.pf.nOff?C.pf.nOff+" souche(s) transcodée(s) mais absente(s) des deux indices (réellement hors gisement).":!C.pf.noTransco.length?"Toutes les souches sont réconciliées par MACE ID.":""}
+  Les souches « GLOBAL » sont hors benchmark mais dans le FTSE Global Index — poids actif = poids portefeuille entier.</div>
   ${makeTable([
     {k:"name",label:"Souche",fmt:(v,r)=>esc(v)+" "+tagFor(r.tag)},
     {k:"region",label:"Région"},{k:"sector",label:"Secteur"},
     {k:"av",label:"AV",fmt:v=>fmt.k(v)},
     {k:"pctAum",label:"% AUM",fmt:v=>fmt.pctp(v,2)},
     {k:"wPf",label:"Poids book",fmt:v=>fmt.pctp(v,2)},
-    {k:"wIx",label:"Poids 0204",fmt:v=>fmt.pctp(v,2)},
+    {k:"wIx",label:"Poids Focus",fmt:v=>fmt.pctp(v,2)},
     {k:"act",label:"Actif",fmt:v=>fmt.sgn(v,2),cls:cls},
     {k:"delta",label:"Δ FTSE",fmt:v=>fmt.n(v,0)},
     {k:"prem",label:"Prime",fmt:v=>fmt.pctp(v,0)},
@@ -1257,13 +1261,13 @@ function renderConvex(C){
   const dG=bucketDist([...S.g.values()],v=>v.delta,v=>v.weight);
   $("#s-convex").innerHTML=`
   <div class="grid2">
-    <div class="panel"><h2>Prime vs delta — book (ambre) sur nuage 0204 (bleu)</h2>
+    <div class="panel"><h2>Prime vs delta — book (ambre) sur nuage Global Focus (bleu)</h2>
       <div class="note">taille du point = poids dans le book ; la diagonale haute-prime/bas-delta = profil obligataire, bas-prime/haut-delta = profil action.</div>
       ${scatter(pts,cloud)}</div>
     <div class="panel"><h2>Distribution par bucket de delta</h2>
-      <div class="legend"><span><i style="background:#FFB938"></i>BG CB</span><span><i style="background:#5B8DEF"></i>Focus 0204</span><span><i style="background:#34D1BF"></i>Global 0001</span></div>
+      <div class="legend"><span><i style="background:#FFB938"></i>BG CB</span><span><i style="background:#5B8DEF"></i>Global Focus</span><span><i style="background:#34D1BF"></i>Global</span></div>
       ${groupedBars(BUCKETS.map(b=>b.k),[dPf,dF,dG],["#FFB938","#5B8DEF","#34D1BF"],620,260,v=>v.toFixed(0)+"%")}
-      <div class="note" style="margin-top:8px">Vol implicite pondérée : book ${fmt.pctp(C.pf.ivol)} vs 0204 ${fmt.pctp(C.fStat.ivol)} — écart ${fmt.sgn(C.pf.ivol-C.fStat.ivol,1)} pt de vol (cherté relative payée sur le book).</div>
+      <div class="note" style="margin-top:8px">Vol implicite pondérée : book ${fmt.pctp(C.pf.ivol)} vs Global Focus ${fmt.pctp(C.fStat.ivol)} — écart ${fmt.sgn(C.pf.ivol-C.fStat.ivol,1)} pt de vol (cherté relative payée sur le book).</div>
     </div>
   </div>`;
 }
@@ -1287,11 +1291,11 @@ function renderCredit(C){
   $("#s-credit").innerHTML=`
   <div class="grid2">
     <div class="panel"><h2>Répartition IG / HY / NR (pondérée)</h2>
-      <div class="legend"><span><i style="background:#FFB938"></i>BG CB</span><span><i style="background:#5B8DEF"></i>0204</span><span><i style="background:#34D1BF"></i>0001</span></div>
+      <div class="legend"><span><i style="background:#FFB938"></i>BG CB</span><span><i style="background:#5B8DEF"></i>Global Focus</span><span><i style="background:#34D1BF"></i>Global</span></div>
       ${groupedBars(["IG","HY","NR"],[[mPf.IG,mPf.HY,mPf.NR],[mF.IG,mF.HY,mF.NR],[mG.IG,mG.HY,mG.NR]],["#FFB938","#5B8DEF","#34D1BF"],620,230,v=>v.toFixed(0)+"%")}</div>
     <div class="panel"><h2>Distribution des spreads (bp)</h2>
       ${groupedBars(SB.map(b=>b.k),[sd(C.cbs,p=>p.ix?p.ix.spread:null,p=>p.w),sd([...S.f.values()],v=>v.spread,v=>v.weight),sd([...S.g.values()],v=>v.spread,v=>v.weight)],["#FFB938","#5B8DEF","#34D1BF"],620,230,v=>v.toFixed(0)+"%")}
-      <div class="note" style="margin-top:8px">Spread pondéré : book ${fmt.bp(C.pf.spread)} vs 0204 ${fmt.bp(C.fStat.spread)} · duration ${fmt.n(C.pf.dur,2)} vs ${fmt.n(C.fStat.dur,2)}.</div></div>
+      <div class="note" style="margin-top:8px">Spread pondéré : book ${fmt.bp(C.pf.spread)} vs Global Focus ${fmt.bp(C.fStat.spread)} · duration ${fmt.n(C.pf.dur,2)} vs ${fmt.n(C.fStat.dur,2)}.</div></div>
   </div>
   <div class="panel"><h2>Détail crédit par souche</h2>
   ${makeTable([
@@ -1325,8 +1329,8 @@ function renderAlloc(C){
     pct:C.aum?((dcReg[k]||0)+(ovReg[k]||0))/C.aum*100:null}));
   $("#s-alloc").innerHTML=`
   <div class="grid2">
-    <div class="panel"><h2>Poids actifs par région (vs 0204)</h2>${hBars(regItems.map(i=>({label:i.label,v:i.v})),620,26,v=>fmt.sgn(v,1)+" pt")}</div>
-    <div class="panel"><h2>Poids actifs par secteur (vs 0204)</h2>${hBars(secItems.map(i=>({label:i.label.slice(0,24),v:i.v})),620,24,v=>fmt.sgn(v,1)+" pt")}</div>
+    <div class="panel"><h2>Poids actifs par région (vs Global Focus)</h2>${hBars(regItems.map(i=>({label:i.label,v:i.v})),620,26,v=>fmt.sgn(v,1)+" pt")}</div>
+    <div class="panel"><h2>Poids actifs par secteur (vs Global Focus)</h2>${hBars(secItems.map(i=>({label:i.label.slice(0,24),v:i.v})),620,24,v=>fmt.sgn(v,1)+" pt")}</div>
   </div>
   <div class="panel"><h2>Exposition action nette par région — CB + overlay dérivés</h2>
   <div class="note">delta cash : CB (Pure Delta Sophis) + options/futures, en valeur et en % de l'AUM.</div>
@@ -1344,7 +1348,7 @@ function renderUniverse(C){
   for(const [mid,v] of S.g){if(!S.f.has(mid))pool.push({mid,...v,held:heldMids.has(mid)})}
   const regions=[...new Set(pool.map(p=>p.region).filter(Boolean))].sort();
   $("#s-universe").innerHTML=`
-  <div class="panel"><h2>Gisement élargi — ${pool.length} souches du Global 0001 absentes du Focus 0204</h2>
+  <div class="panel"><h2>Gisement élargi — ${pool.length} souches du FTSE Global Index absentes du Global Focus</h2>
   <div class="note">écran d'idées hors benchmark : filtrer sur la zone de convexité (Δ 20–70, prime &lt; 60 %) et le risque crédit. Les souches déjà détenues sont marquées.</div>
   <div class="filters">
     <div><label>Δ min</label><input type="number" id="u-dmin" value="20"></div>
@@ -1452,15 +1456,16 @@ function xlsSheet(name,cols,rows){
 }
 function exportXls(){
   const C=S.calc;if(!C)return;
-  const statusLab=st=>st==="focus"?"Focus 0204":st==="broad"?"0001":"Hors indice";
+  const statusLab=st=>st==="focus"?"Global Focus":st==="broad"?"Global":st==="notr"?"Transco manquante":"Hors indice";
 
   // 1. Synthèse — métriques pondérées et exposition
-  const synthese=xlsSheet("Synthèse",["Métrique","BG CB","Focus 0204","Global 0001"],[
+  const synthese=xlsSheet("Synthèse",["Métrique","BG CB","FTSE Global Focus Index","FTSE Global Index"],[
     ["AUM (€)",R(C.aum,0),null,null],
     ["Poche CB / AV (€)",R(C.totAv,0),null,null],
     ["Nb de souches",C.pf.n,C.fStat.n,C.gStat.n],
-    ["dont Focus 0204 / 0001 / hors",C.pf.nFocus,C.pf.nBroad,C.pf.nOff],
-    ["Active share vs 0204 (%)",R(C.pf.activeShare,1),null,null],
+    ["dont Global Focus / Global / hors",C.pf.nFocus,C.pf.nBroad,C.pf.nOff],
+    ["Souches sans transco"+(C.pf.noTransco.length?" : "+C.pf.noTransco.join(", "):""),C.pf.noTransco.length,null,null],
+    ["Active share vs Global Focus (%)",R(C.pf.activeShare,1),null,null],
     ["Poids indice détenus (%)",R(C.pf.overlapW,1),null,null],
     ["Delta pondéré",R(C.pf.delta,1),R(C.fStat.delta,1),R(C.gStat.delta,1)],
     ["Prime de conversion (%)",R(C.pf.premium,1),R(C.fStat.premium,1),R(C.gStat.premium,1)],
@@ -1569,9 +1574,9 @@ function exportXls(){
   }
   const recap=xlsSheet("Récap hebdo",["Réplique de l'onglet Summary","","",""],rcr);
 
-  // 2. Poids actifs vs 0204
+  // 2. Poids actifs vs Global Focus
   const weights=xlsSheet("Poids actifs",
-    ["Souche","Statut","Région","Secteur","AV","% AUM","Poids book %","Poids 0204 %","Actif (pt)","Δ FTSE","Prime %","Spread bp"],
+    ["Souche","Statut","Région","Secteur","AV","% AUM","Poids book %","Poids Focus %","Actif (pt)","Δ FTSE","Prime %","Spread bp"],
     C.cbs.map(p=>[p.name,statusLab(p.status),p.ix?p.ix.region:p.region,p.ix?p.ix.sector:p.gics,
       R(p.av,0),R(p.pctAum*100,3),R(p.w*100,3),R(p.fx?p.fx.weight:0,3),R(p.w*100-(p.fx?p.fx.weight:0),3),
       R(p.ix?p.ix.delta:null,0),R(p.ix?p.ix.premium:null,1),R(p.ix?p.ix.spread:null,0)]));
@@ -1601,7 +1606,7 @@ function exportXls(){
   const pool=[];
   for(const [mid,v] of S.g){if(!S.f.has(mid))pool.push([v.issue,v.isin,v.region,v.sector,v.ccy,
     heldMids.has(mid)?"oui":"",R(v.delta,0),R(v.premium,1),R(v.spread,0),R(v.ivol,1),R(v.ytmp,1),R(v.mcap,0)])}
-  const universe=xlsSheet("Gisement 0001",
+  const universe=xlsSheet("Gisement Global",
     ["Souche","ISIN","Région","Secteur","Ccy","Détenu","Δ","Prime %","Spread bp","IVol %","YTM/P %","Taille $m"],pool);
 
   // 7. Allocation — exposition action nette par région (CB + overlay)
