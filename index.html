@@ -138,6 +138,7 @@ svg text{font-family:var(--mono)}
   <div class="chip" id="chip-g"   data-slot="g">FTSE Global (.xls)<small>UCBINDEX0001-CD_…</small></div>
   <div class="chip" id="chip-tr"  data-slot="tr">Data loader (requis)<small>2026_Data_loader.xlsm — transco CBs + hub perf (« hub in value »)</small></div>
   <div class="chip" id="chip-pnl" data-slot="pnl">PnL Followers (optionnel)<small>PnL BGF Followers DDMMYYYY.xlsx — estimé BGCB (feuille BGCB)</small></div>
+  <div class="chip" id="chip-rr2" data-slot="rr2">Risk report N-1 (optionnel)<small>un 2ᵉ risk report → trades de la semaine (le plus ancien devient N-1)</small></div>
   <input type="file" id="fpick" multiple style="display:none" accept=".xls,.xlsx,.xlsm">
   <div id="drop-hint">glisser-déposer les fichiers n'importe où sur la page</div>
 </div>
@@ -375,7 +376,8 @@ function parseBiff8(stream){
 }
 
 /* ======================= modèles de données ======================= */
-const S={rr:null,f:null,g:null,transco:null,perf:null,pnlEst:null,date:null,withOverlay:true};
+const S={rr:null,rr2:null,f:null,g:null,transco:null,perf:null,pnlEst:null,date:null,withOverlay:true,
+  betaCfg:{bench:"Global Focus Hedged Parity (EUR)",win:90,mode:"flat",hl:30}};
 
 function parseFtseRows(rows){
   let hi=-1;
@@ -491,6 +493,112 @@ function pnlEstRet(ref){ // perf estimée = Π(1+Σ PnL jour / AuM jour) sur (re
   let l=1;
   for(let i=0;i<E.dates.length;i++)if(E.dates[i]>ref)l*=1+E.rets[i];
   return l-1;
+}
+
+/* ---- beta (§7) : régression des retours quotidiens du hub, fenêtre & pondération réglables ---- */
+const BETA_BENCHES=["Global Focus Hedged Parity (EUR)","FTSE Global Focus EUR-Hedged","US Focus Hedged Parity (USD)","MSCI World","SPX","NDX"];
+function wbeta(x,y,lam){ // beta pondéré λ^age (λ=1 → uniforme)
+  const n=x.length;if(n<10)return null;
+  let W=0,mx=0,my=0;const w=new Array(n);
+  for(let i=0;i<n;i++){w[i]=Math.pow(lam,n-1-i);W+=w[i];mx+=w[i]*x[i];my+=w[i]*y[i]}
+  mx/=W;my/=W;
+  let cxx=0,cxy=0,cyy=0;
+  for(let i=0;i<n;i++){const dx=x[i]-mx,dy=y[i]-my;cxx+=w[i]*dx*dx;cxy+=w[i]*dx*dy;cyy+=w[i]*dy*dy}
+  if(!cxx)return null;
+  const beta=cxy/cxx;
+  return {beta,alpha:my-beta*mx,r2:cyy?(cxy*cxy)/(cxx*cyy):null};
+}
+function betaCalc(benchName,winN,mode,halfLife){
+  const P=S.perf;if(!P)return null;
+  const f=P.series["BG CB I-EUR"], bs=P.series[benchName];
+  if(!f||!bs)return null;
+  // retours quotidiens jours ouvrés ; on saute les jours doublement figés (week-ends recopiés, fériés)
+  const xs=[],ys=[],ds=[];
+  let pf=null,pb=null;
+  for(let i=0;i<P.dates.length;i++){
+    const dow=serialToDate(P.dates[i]).getUTCDay();
+    if(dow===0||dow===6)continue;
+    const lf=f[i],lb=bs[i];
+    if(lf==null||lb==null)continue;
+    if(pf!=null&&pb!=null&&pf!==0&&pb!==0){
+      const rf=lf/pf-1, rb=lb/pb-1;
+      if(!(rf===0&&rb===0)){xs.push(rb);ys.push(rf);ds.push(P.dates[i])}
+    }
+    pf=lf;pb=lb;
+  }
+  const n=Math.min(winN,xs.length);
+  const lam=mode==="ewma"?Math.pow(0.5,1/Math.max(1,halfLife)):1;
+  const cur=wbeta(xs.slice(-n),ys.slice(-n),lam);
+  if(!cur)return null;
+  const roll=[];
+  for(let e=n;e<=xs.length;e+=5){
+    const b=wbeta(xs.slice(e-n,e),ys.slice(e-n,e),lam);
+    roll.push({d:ds[e-1],b:b?b.beta:null});
+  }
+  if(roll.length>104)roll.splice(0,roll.length-104); // ~2 ans de points
+  return {...cur,n,roll};
+}
+function betaSpark(roll,w=640,h=140){
+  const vs=roll.map(p=>p.b).filter(v=>v!=null&&isFinite(v));
+  if(vs.length<3)return"";
+  const lo=Math.min(...vs),hi=Math.max(...vs),pad=(hi-lo)*0.15||0.05;
+  const y0=lo-pad,y1=hi+pad;
+  const X=i=>46+(w-56)*i/(roll.length-1), Y=v=>8+(h-34)*(1-(v-y0)/(y1-y0));
+  let s=svgOpen(w,h);
+  for(const g of [lo,(lo+hi)/2,hi]){
+    s+='<line x1="46" y1="'+Y(g)+'" x2="'+(w-10)+'" y2="'+Y(g)+'" stroke="#1E2B47"/>';
+    s+='<text x="40" y="'+(Y(g)+3)+'" fill="#5A6884" font-size="9" text-anchor="end">'+g.toFixed(2)+"</text>";
+  }
+  let pts="";
+  roll.forEach((p,i)=>{if(p.b!=null)pts+=(pts?" ":"")+X(i).toFixed(1)+","+Y(p.b).toFixed(1)});
+  s+='<polyline fill="none" stroke="#FFB938" stroke-width="1.6" points="'+pts+'"/>';
+  const last=roll[roll.length-1];
+  if(last.b!=null)s+='<circle cx="'+X(roll.length-1)+'" cy="'+Y(last.b)+'" r="3" fill="#FFB938"/>';
+  s+='<text x="46" y="'+(h-6)+'" fill="#8292B2" font-size="9">'+frDate(roll[0].d)+"</text>";
+  s+='<text x="'+(w-10)+'" y="'+(h-6)+'" fill="#8292B2" font-size="9" text-anchor="end">'+frDate(last.d)+"</text>";
+  return s+"</svg>";
+}
+function drawBeta(){
+  const out=$("#b7-out");if(!out)return;
+  const cfg=S.betaCfg;
+  const r=betaCalc(cfg.bench,cfg.win,cfg.mode,cfg.hl);
+  if(!r){out.innerHTML='<div class="note">données insuffisantes pour cette fenêtre (minimum 10 retours).</div>';return}
+  const corr=r.r2==null?null:Math.sign(r.beta)*Math.sqrt(r.r2);
+  out.innerHTML=`
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);margin:4px 0 12px">
+    <div class="kpi"><div class="lab">Beta — ${cfg.mode==="ewma"?"exponentiel (demi-vie "+cfg.hl+" j)":"uniforme"}</div><div class="val" style="color:var(--amber)">${r.beta.toFixed(3)}</div></div>
+    <div class="kpi"><div class="lab">Alpha annualisé</div><div class="val">${fmt.sgn(r.alpha*252*100,1)}<small>%</small></div></div>
+    <div class="kpi"><div class="lab">R²</div><div class="val">${r.r2==null?"·":r.r2.toFixed(2)}</div></div>
+    <div class="kpi"><div class="lab">Corrélation</div><div class="val">${corr==null?"·":corr.toFixed(2)}</div></div>
+    <div class="kpi"><div class="lab">Observations</div><div class="val">${r.n}</div></div>
+  </div>
+  ${r.roll.length>2?'<div class="note">beta glissant — mêmes paramètres, recalculé tous les 5 jours ouvrés :</div>'+betaSpark(r.roll):""}`;
+}
+
+/* ---- trades de la semaine (§8) : diff entre deux risk reports ---- */
+function dmySerial(s){const m=String(s||"").match(/(\d{2})\/(\d{2})\/(\d{4})/);
+  return m?dateToSerial(new Date(Date.UTC(+m[3],+m[2]-1,+m[1]))):null}
+function assignRiskReport(parsed,label){
+  const dNew=dmySerial(parsed.date), dCur=S.rr?dmySerial(S.rr.date):null;
+  if(S.rr&&dNew!=null&&dCur!=null&&dNew!==dCur){
+    if(dNew<dCur){S.rr2=parsed;mark("rr2",label+" (du "+parsed.date+")")}
+    else{S.rr2=S.rr;S.rr=parsed;mark("rr2","risk report du "+(S.rr2.date||"?"));mark("rr",label)}
+  }else{S.rr=parsed;mark("rr",label)}
+}
+function computeTrades(){
+  if(!(S.rr&&S.rr2))return null;
+  const snap=rr=>{const o={};for(const p of [...rr.cbs,...rr.ovl])if(p.bucket!=="Cash")o[p.name]=p;return o};
+  const cur=snap(S.rr), prev=snap(S.rr2);
+  const out=[];
+  for(const n of new Set([...Object.keys(cur),...Object.keys(prev)])){
+    const c=cur[n], q=prev[n];
+    const dq=(c?c.qty||0:0)-(q?q.qty||0:0);
+    const dav=(c?c.av||0:0)-(q?q.av||0:0);
+    if(!q)out.push({name:n,type:"Nouveau",bucket:c.bucket,dq,dav,ccy:c.ccy});
+    else if(!c)out.push({name:n,type:"Soldé",bucket:q.bucket,dq,dav,ccy:q.ccy});
+    else if(Math.abs(dq)>1e-9)out.push({name:n,type:dq>0?"Renforcé":"Allégé",bucket:c.bucket,dq,dav,ccy:c.ccy});
+  }
+  return {trades:out.sort((a,b)=>Math.abs(b.dav)-Math.abs(a.dav)),from:S.rr2.date,to:S.rr.date};
 }
 
 /* ---- over/under performance (§2) : Brinson-Fachler estimé vs Focus régionaux ---- */
@@ -977,10 +1085,30 @@ function renderRecap(C){
       g.pf==null?"n.d.":{t:b(fmt.n(g.pf,g.d)+(g.u||""))},
       g.ix==null?"n.d.":fmt.n(g.ix,g.d)+(g.u||"")]))}
     <div class="note" style="margin-top:8px">rho, thétas (optional / credit / driftless), sensi crédit Sophis et stress spot ±20 % restent à brancher (source Misys, absente des fichiers chargés).</div></div>
-  <div class="grid2">
-    <div class="panel">${off(7,"Beta — 90 jours glissants","non calculable ici — nécessite un historique de VL (hub Performance).")}</div>
-    <div class="panel">${off(8,"Trades de la semaine","non calculable ici — nécessite deux risk reports successifs pour différencier les positions.")}</div>
-  </div>`;
+  ${S.perf?`<div class="panel"><h2>7. Beta vs benchmark — fenêtre &amp; pondération réglables</h2>
+    <div class="note">régression des retours quotidiens (jours ouvrés) du hub ; « exponentielle » = poids λ^âge avec demi-vie en jours.
+    Référence classeur hebdo : 0,914 vs Focus hedged TR sur 90 j. Les jours de NAV figée (publication en retard) atténuent légèrement le beta.</div>
+    <div class="filters">
+      <div><label>Benchmark</label><select id="b7-bench">${BETA_BENCHES.filter(n=>S.perf.series[n]).map(n=>"<option"+(n===S.betaCfg.bench?" selected":"")+">"+esc(n)+"</option>").join("")}</select></div>
+      <div><label>Fenêtre (j ouvrés)</label><input type="number" id="b7-win" value="${S.betaCfg.win}" min="20" max="1500"></div>
+      <div><label>Pondération</label><select id="b7-mode"><option value="flat"${S.betaCfg.mode==="flat"?" selected":""}>Uniforme</option><option value="ewma"${S.betaCfg.mode==="ewma"?" selected":""}>Exponentielle</option></select></div>
+      <div><label>Demi-vie (j)</label><input type="number" id="b7-hl" value="${S.betaCfg.hl}" min="5" max="500"></div>
+    </div>
+    <div id="b7-out"></div>
+  </div>`:'<div class="panel">'+off(7,"Beta","non calculable — nécessite le hub perf du data loader (onglet « hub in value »).")+"</div>"}
+  ${(()=>{const t8=computeTrades();
+    if(!t8)return '<div class="panel">'+off(8,"Trades de la semaine","déposer aussi le risk report précédent — le tool garde le plus récent comme courant et l’autre comme N-1.")+"</div>";
+    return `<div class="panel"><h2>8. Trades de la semaine — ${esc(t8.from||"?")} → ${esc(t8.to||"?")}</h2>
+    <div class="note">diff des positions entre les deux risk reports (hors cash) ; Δ AV inclut l'effet marché de la période, pas seulement le montant traité.</div>
+    ${t8.trades.length?sT(["Instrument","Mouvement","Bucket","Δ Qté","Δ AV","Ccy"],
+      t8.trades.map(t=>[esc(t.name),t.type,esc(t.bucket||"·"),{t:fmt.n(t.dq,0),cls:cls(t.dq)},{t:fmt.k(t.dav),cls:cls(t.dav)},esc(t.ccy||"·")]))
+      :'<div class="note">aucun mouvement détecté entre les deux dates.</div>'}
+  </div>`})()}`;
+  if(S.perf){
+    const upd=()=>{S.betaCfg={bench:$("#b7-bench").value,win:+$("#b7-win").value||90,mode:$("#b7-mode").value,hl:+$("#b7-hl").value||30};drawBeta()};
+    ["b7-bench","b7-win","b7-mode","b7-hl"].forEach(id=>{const el=$("#"+id);if(el)el.addEventListener("input",upd)});
+    drawBeta();
+  }
 }
 
 function renderOverview(C){
@@ -1333,6 +1461,18 @@ function exportXls(){
   push();
   push("6. Greeks","BGCB","FTSE Global Focus");
   for(const g of rc.greeks)push(g.m,R(g.pf,g.d),R(g.ix,g.d));
+  if(S.perf){
+    const bx=betaCalc(S.betaCfg.bench,S.betaCfg.win,S.betaCfg.mode,S.betaCfg.hl);
+    if(bx){push();
+      push("7. Beta vs "+S.betaCfg.bench+" — fenêtre "+S.betaCfg.win+" j, "+(S.betaCfg.mode==="ewma"?"exponentiel demi-vie "+S.betaCfg.hl+" j":"uniforme"));
+      push("Beta",R(bx.beta,3),"Alpha annualisé %",R(bx.alpha*252*100,2),"R²",R(bx.r2,3),"Observations",bx.n);
+    }
+  }
+  const trx=computeTrades();
+  if(trx){push();
+    push("8. Trades — "+(trx.from||"?")+" → "+(trx.to||"?"),"Mouvement","Bucket","Δ Qté","Δ AV","Ccy");
+    for(const t of trx.trades)push(t.name,t.type,t.bucket,R(t.dq,0),R(t.dav,0),t.ccy);
+  }
   const recap=xlsSheet("Récap hebdo",["Réplique de l'onglet Summary","","",""],rcr);
 
   // 2. Poids actifs vs 0204
@@ -1408,7 +1548,7 @@ async function handleFile(file){
       S.pnlEst=E;mark("pnl",file.name+" ("+E.dates.length+" jours, jusqu'au "+frDate(E.dates[E.dates.length-1])+")");
     }
     else if(/risk_report|risk report/.test(name)||name.endsWith(".xlsx")){
-      try{S.rr=parseRiskReport(await readXlsxSheet(buf,"BGCB Portfolio"));mark("rr",file.name)}
+      try{assignRiskReport(parseRiskReport(await readXlsxSheet(buf,"BGCB Portfolio")),file.name)}
       catch(e){ // pas un risk report : tenter la PnL Followers (feuille BGCB)
         const E=parsePnlFollowers(await readXlsxSheet(buf,"BGCB"));
         S.pnlEst=E;mark("pnl",file.name+" ("+E.dates.length+" jours, jusqu'au "+frDate(E.dates[E.dates.length-1])+")");
