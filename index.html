@@ -1,0 +1,904 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BG CB — Index Compare</title>
+<style>
+:root{
+  --bg:#0A0F1C; --panel:#111A2E; --panel2:#0D1526; --line:#1E2B47; --line2:#2A3A5E;
+  --ink:#DCE5F5; --mut:#8292B2; --faint:#5A6884;
+  --amber:#FFB938; --amber2:#CE8F1B;
+  --blue:#5B8DEF;   /* Focus 0204 */
+  --teal:#34D1BF;   /* Global 0001 */
+  --violet:#9D7BEF; /* overlay dérivés */
+  --green:#3DD68C; --red:#ED5C76;
+  --mono:"IBM Plex Mono","DM Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--bg);color:var(--ink);font-family:var(--mono);font-size:13px;line-height:1.45}
+::selection{background:var(--amber2);color:#000}
+a{color:var(--amber)}
+.wrap{max-width:1480px;margin:0 auto;padding:0 22px 80px}
+
+/* ---------- header ---------- */
+header{border-bottom:1px solid var(--line);padding:18px 0 14px;display:flex;flex-wrap:wrap;gap:14px;align-items:baseline}
+.brand{font-weight:700;font-size:17px;letter-spacing:.06em}
+.brand b{color:var(--amber)}
+.sub{color:var(--mut);font-size:11.5px;letter-spacing:.04em}
+.asof{margin-left:auto;color:var(--mut);font-size:11.5px}
+.asof b{color:var(--ink)}
+
+/* ---------- file chips ---------- */
+#filebar{display:flex;flex-wrap:wrap;gap:10px;padding:14px 0;border-bottom:1px solid var(--line)}
+.chip{border:1px dashed var(--line2);border-radius:4px;padding:8px 12px;cursor:pointer;color:var(--mut);font-size:11.5px;transition:border-color .15s,color .15s;background:var(--panel2)}
+.chip:hover{border-color:var(--amber2);color:var(--ink)}
+.chip.ok{border-style:solid;border-color:var(--green);color:var(--ink)}
+.chip.ok::before{content:"● ";color:var(--green)}
+.chip.err{border-style:solid;border-color:var(--red);color:var(--red)}
+.chip small{display:block;color:var(--faint);font-size:10px;margin-top:2px}
+#drop-hint{color:var(--faint);font-size:11px;align-self:center;margin-left:auto}
+body.dragging .chip{border-color:var(--amber)}
+
+/* ---------- KPI band ---------- */
+#kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);margin:18px 0}
+.kpi{background:var(--panel);padding:14px 16px}
+.kpi .lab{color:var(--mut);font-size:10px;text-transform:uppercase;letter-spacing:.12em;margin-bottom:6px}
+.kpi .val{font-size:21px;font-weight:600;letter-spacing:-.01em}
+.kpi .val small{font-size:12px;color:var(--mut);font-weight:400}
+.kpi .cmp{font-size:10.5px;color:var(--faint);margin-top:4px}
+.kpi .cmp b{color:var(--blue);font-weight:400}
+.kpi.hero .val{color:var(--amber)}
+
+/* ---------- tabs ---------- */
+nav{display:flex;flex-wrap:wrap;gap:2px;border-bottom:1px solid var(--line);margin-bottom:20px;position:sticky;top:0;background:var(--bg);z-index:30;padding-top:6px}
+nav button{font-family:var(--mono);background:none;border:none;color:var(--mut);font-size:12px;padding:9px 14px;cursor:pointer;border-bottom:2px solid transparent;letter-spacing:.03em}
+nav button:hover{color:var(--ink)}
+nav button.on{color:var(--amber);border-bottom-color:var(--amber)}
+nav button:focus-visible{outline:1px solid var(--amber);outline-offset:-1px}
+
+/* ---------- sections / panels ---------- */
+section{display:none}
+section.on{display:block}
+.panel{background:var(--panel);border:1px solid var(--line);padding:16px 18px;margin-bottom:18px}
+.panel h2{font-size:12px;text-transform:uppercase;letter-spacing:.14em;color:var(--amber);margin-bottom:4px;font-weight:600}
+.panel .note{color:var(--mut);font-size:11px;margin-bottom:12px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:18px}
+@media(max-width:980px){.grid2,.grid3{grid-template-columns:1fr}}
+
+/* ---------- tables ---------- */
+.tblwrap{overflow:auto;max-height:560px;border:1px solid var(--line)}
+table{border-collapse:collapse;width:100%;font-size:11.5px;white-space:nowrap}
+th{position:sticky;top:0;background:var(--panel2);color:var(--mut);text-align:right;padding:7px 9px;font-weight:500;font-size:10px;text-transform:uppercase;letter-spacing:.08em;cursor:pointer;border-bottom:1px solid var(--line2);z-index:5}
+th:first-child,td:first-child{text-align:left}
+th.s-asc::after{content:" ▲";color:var(--amber)} th.s-desc::after{content:" ▼";color:var(--amber)}
+td{padding:5px 9px;text-align:right;border-bottom:1px solid var(--line)}
+tr:hover td{background:rgba(255,185,56,.05)}
+td.pos{color:var(--green)} td.neg{color:var(--red)} td.mut{color:var(--mut)}
+td .tag{display:inline-block;font-size:9.5px;padding:1px 6px;border-radius:3px;letter-spacing:.05em}
+.tag.focus{background:rgba(91,141,239,.15);color:var(--blue)}
+.tag.broad{background:rgba(52,209,191,.15);color:var(--teal)}
+.tag.off{background:rgba(237,92,118,.15);color:var(--red)}
+.tag.opt{background:rgba(157,123,239,.18);color:var(--violet)}
+.tag.fut{background:rgba(237,92,118,.18);color:var(--red)}
+.tag.cash{background:rgba(130,146,178,.18);color:var(--mut)}
+
+/* ---------- charts ---------- */
+svg text{font-family:var(--mono)}
+.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:10.5px;color:var(--mut);margin:8px 0 2px}
+.legend i{display:inline-block;width:9px;height:9px;margin-right:5px;border-radius:2px;vertical-align:-1px}
+
+/* ---------- signature : échelle de convexité ---------- */
+.ladder-row{display:grid;grid-template-columns:120px 1fr 70px;gap:12px;align-items:center;margin:7px 0}
+.ladder-row .who{font-size:11px;color:var(--mut);text-align:right}
+.ladder-row .who.pf{color:var(--amber)}
+.ladder-bar{display:flex;height:30px;border:1px solid var(--line2);background:var(--panel2)}
+.ladder-bar div{height:100%;transition:width .5s ease;position:relative}
+.ladder-bar div span{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:10px;color:#04101f;font-weight:600;overflow:hidden}
+.ladder-row .wd{font-size:13px;font-weight:600;text-align:left}
+.ladder-axis{display:grid;grid-template-columns:120px 1fr 70px;gap:12px;color:var(--faint);font-size:9.5px;margin-top:2px}
+.ladder-axis>div:nth-child(2){display:flex;justify-content:space-between}
+
+/* ---------- filters ---------- */
+.filters{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px}
+.filters label{display:block;color:var(--mut);font-size:10px;text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px}
+.filters input,.filters select{font-family:var(--mono);background:var(--panel2);border:1px solid var(--line2);color:var(--ink);padding:6px 8px;font-size:12px;border-radius:3px;width:110px}
+.filters select{width:170px}
+.filters input:focus,.filters select:focus{outline:1px solid var(--amber2)}
+.count{color:var(--faint);font-size:11px;align-self:center}
+
+/* ---------- toggle overlay ---------- */
+.toggle{display:inline-flex;border:1px solid var(--line2);border-radius:4px;overflow:hidden;margin-left:auto}
+.toggle button{font-family:var(--mono);background:none;border:none;color:var(--mut);font-size:11px;padding:6px 12px;cursor:pointer}
+.toggle button.on{background:var(--amber);color:#0A0F1C;font-weight:600}
+.bar-h{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+
+#empty{padding:60px 20px;text-align:center;color:var(--mut);border:1px dashed var(--line2);margin-top:24px}
+#empty b{color:var(--amber)}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="brand">BG&nbsp;CB <b>/</b> INDEX COMPARE</div>
+  <div class="sub">portefeuille vs FTSE Global Focus (0204) &amp; FTSE Global (0001)</div>
+  <div class="asof" id="asof"></div>
+</header>
+
+<div id="filebar">
+  <div class="chip" id="chip-rr"  data-slot="rr">Risk report (.xlsx)<small>20YYMMDD_-_BGCB_Risk_Report…</small></div>
+  <div class="chip" id="chip-f"   data-slot="f">FTSE Global Focus (.xls)<small>UCBINDEX0204-CD_…</small></div>
+  <div class="chip" id="chip-g"   data-slot="g">FTSE Global (.xls)<small>UCBINDEX0001-CD_…</small></div>
+  <div class="chip" id="chip-tr"  data-slot="tr">Transco (requis)<small>2026_Data_loader.xlsm — onglet CBs (MACE ID ↔ nom Mysis)</small></div>
+  <input type="file" id="fpick" multiple style="display:none" accept=".xls,.xlsx,.xlsm">
+  <div id="drop-hint">glisser-déposer les fichiers n'importe où sur la page</div>
+</div>
+
+<div id="empty"><b>Déposer le risk report, les deux fichiers UCBINDEX et le data loader (transco)</b> pour lancer l'analyse.<br>Aucune donnée de portefeuille n'est embarquée dans ce fichier.<br>
+Tout est calculé localement dans le navigateur — aucune donnée ne quitte le poste.</div>
+
+<div id="app" style="display:none">
+  <div id="kpis"></div>
+  <nav id="tabs"></nav>
+  <section id="s-overview"></section>
+  <section id="s-weights"></section>
+  <section id="s-convex"></section>
+  <section id="s-credit"></section>
+  <section id="s-alloc"></section>
+  <section id="s-universe"></section>
+  <section id="s-recon"></section>
+  <section id="s-overlay"></section>
+</div>
+
+</div>
+<script>
+"use strict";
+/* =====================================================================
+   BG CB — Index Compare. Fichier autonome, aucune dépendance externe.
+   Parseurs : ZIP/XLSX (DecompressionStream) + OLE2/BIFF8 (.xls FTSE).
+   ===================================================================== */
+
+/* ------------------------- transco embarquée ------------------------- */
+const TRANSCO_DEFAULT = {}; // version publique : transco non embarquée — déposer le data loader (onglet CBs)
+
+/* ============================ ZIP / XLSX ============================ */
+async function inflateRaw(u8){
+  const ds=new DecompressionStream("deflate-raw");
+  const out=await new Response(new Blob([u8]).stream().pipeThrough(ds)).arrayBuffer();
+  return new Uint8Array(out);
+}
+async function zipEntries(buf){
+  const dv=new DataView(buf), u8=new Uint8Array(buf);
+  let eocd=-1;
+  for(let i=buf.byteLength-22;i>=Math.max(0,buf.byteLength-22-65536);i--)
+    if(dv.getUint32(i,true)===0x06054b50){eocd=i;break}
+  if(eocd<0) throw new Error("ZIP: EOCD introuvable");
+  const n=dv.getUint16(eocd+10,true); let off=dv.getUint32(eocd+16,true);
+  const entries={};
+  const dec=new TextDecoder();
+  for(let k=0;k<n;k++){
+    if(dv.getUint32(off,true)!==0x02014b50) throw new Error("ZIP: CDFH");
+    const method=dv.getUint16(off+10,true), csize=dv.getUint32(off+20,true);
+    const nlen=dv.getUint16(off+28,true), elen=dv.getUint16(off+30,true), clen=dv.getUint16(off+32,true);
+    const lho=dv.getUint32(off+42,true);
+    const name=dec.decode(u8.subarray(off+46,off+46+nlen));
+    entries[name]={method,csize,lho};
+    off+=46+nlen+elen+clen;
+  }
+  return {entries, async read(name){
+    const e=entries[name]; if(!e) return null;
+    const nl=dv.getUint16(e.lho+26,true), el=dv.getUint16(e.lho+28,true);
+    const start=e.lho+30+nl+el, raw=u8.subarray(start,start+e.csize);
+    return e.method===0?raw:await inflateRaw(raw);
+  }};
+}
+function xmlText(s){return s.replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&quot;/g,'"').replace(/&apos;/g,"'").replace(/&#(\d+);/g,(m,d)=>String.fromCharCode(+d)).replace(/&amp;/g,"&")}
+function colToIdx(ref){let c=0;for(const ch of ref){const x=ch.charCodeAt(0);if(x>=65&&x<=90)c=c*26+x-64;else break}return c-1}
+async function readXlsxSheet(buf, wantSheet){
+  const z=await zipEntries(buf), dec=new TextDecoder();
+  const wbx=dec.decode(await z.read("xl/workbook.xml"));
+  const rels=dec.decode(await z.read("xl/_rels/workbook.xml.rels"));
+  const relMap={}; for(const m of rels.matchAll(/Id="([^"]+)"[^>]*Target="([^"]+)"/g)) relMap[m[1]]=m[2];
+  let target=null;
+  for(const m of wbx.matchAll(/<sheet[^>]*name="([^"]+)"[^>]*r:id="([^"]+)"/g))
+    if(xmlText(m[1])===wantSheet){target=relMap[m[2]];break}
+  if(!target) throw new Error("Onglet '"+wantSheet+"' introuvable");
+  if(!target.startsWith("xl/")) target="xl/"+target.replace(/^\//,"").replace(/^xl\//,"");
+  const sst=[];
+  const sstRaw=await z.read("xl/sharedStrings.xml");
+  if(sstRaw){const s=dec.decode(sstRaw);
+    for(const m of s.matchAll(/<si>([\s\S]*?)<\/si>/g)){
+      let t="";for(const tm of m[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)) t+=xmlText(tm[1]);
+      sst.push(t);}}
+  const sx=dec.decode(await z.read(target));
+  const rows=[];
+  for(const rm of sx.matchAll(/<row[^>]*r="(\d+)"[^>]*>([\s\S]*?)<\/row>/g)){
+    const r=+rm[1]-1, cells=[];
+    for(const cm of rm[2].matchAll(/<c r="([A-Z]+)\d+"([^>]*)(?:\/>|>([\s\S]*?)<\/c>)/g)){
+      const ci=colToIdx(cm[1]), attrs=cm[2]||"", body=cm[3]||"";
+      const tm=attrs.match(/t="([^"]+)"/), t=tm?tm[1]:"";
+      let v=null;
+      if(t==="inlineStr"){let s="";for(const im of body.matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g))s+=xmlText(im[1]);v=s}
+      else{const vm=body.match(/<v>([\s\S]*?)<\/v>/);
+        if(vm){ if(t==="s")v=sst[+vm[1]]??null; else if(t==="str"||t==="e")v=xmlText(vm[1]); else v=parseFloat(vm[1]); }}
+      cells[ci]=v;
+    }
+    rows[r]=cells;
+  }
+  return rows;
+}
+
+/* ============================ OLE2 / BIFF8 ============================ */
+function ole2Stream(buf, wantNames){
+  const dv=new DataView(buf), u8=new Uint8Array(buf);
+  if(dv.getUint32(0,true)!==0xE011CFD0) throw new Error("Pas un fichier OLE2 (.xls)");
+  const ssz=1<<dv.getUint16(30,true), mssz=1<<dv.getUint16(32,true);
+  const nFat=dv.getUint32(44,true), dirStart=dv.getInt32(48,true);
+  const minCut=dv.getUint32(56,true), miniFatStart=dv.getInt32(60,true);
+  const difStart=dv.getInt32(68,true), nDif=dv.getUint32(72,true);
+  const fatSecs=[];
+  for(let i=0;i<109&&fatSecs.length<nFat;i++){const s=dv.getInt32(76+4*i,true);if(s>=0)fatSecs.push(s)}
+  let ds=difStart;
+  for(let k=0;k<nDif&&ds>=0;k++){
+    const base=512+ds*ssz;
+    for(let i=0;i<ssz/4-1;i++){const s=dv.getInt32(base+4*i,true);if(s>=0)fatSecs.push(s)}
+    ds=dv.getInt32(base+ssz-4,true);
+  }
+  const fat=new Int32Array(fatSecs.length*(ssz/4));
+  fatSecs.forEach((sec,i)=>{const base=512+sec*ssz;for(let j=0;j<ssz/4;j++)fat[i*(ssz/4)+j]=dv.getInt32(base+4*j,true)});
+  function chain(start, table){const out=[];let s=start,guard=0;while(s>=0&&guard++<2_000_000){out.push(s);s=table[s]}return out}
+  function readChain(start){const secs=chain(start,fat);const out=new Uint8Array(secs.length*ssz);
+    secs.forEach((s,i)=>out.set(u8.subarray(512+s*ssz,512+(s+1)*ssz),i*ssz));return out}
+  // répertoire
+  const dir=readChain(dirStart), entries=[];
+  for(let off=0;off+128<=dir.length;off+=128){
+    const d2=new DataView(dir.buffer,dir.byteOffset+off,128);
+    const nlen=d2.getUint16(64,true); if(!nlen)continue;
+    let name="";for(let i=0;i<nlen-2;i+=2)name+=String.fromCharCode(d2.getUint16(66+i-2>=64?0:66+i,true));
+    name="";for(let i=0;i<nlen-2;i+=2)name+=String.fromCharCode(d2.getUint16(i,true));
+    entries.push({name,type:d2.getUint8(66),start:d2.getInt32(116,true),size:d2.getUint32(120,true)});
+  }
+  const root=entries.find(e=>e.type===5);
+  let miniFat=null, miniCont=null;
+  function readMini(start,size){
+    if(!miniFat){
+      const mf=readChain(miniFatStart>=0?miniFatStart:-2);
+      miniFat=new Int32Array(mf.buffer,mf.byteOffset,mf.length/4);
+      miniCont=readChain(root.start);
+    }
+    const secs=chain(start,miniFat), out=new Uint8Array(secs.length*mssz);
+    secs.forEach((s,i)=>out.set(miniCont.subarray(s*mssz,(s+1)*mssz),i*mssz));
+    return out.subarray(0,size);
+  }
+  for(const w of wantNames){
+    const e=entries.find(x=>x.name===w);
+    if(e) return (e.size<minCut?readMini(e.start,e.size):readChain(e.start)).subarray(0,e.size);
+  }
+  throw new Error("Stream Workbook introuvable");
+}
+function parseBiff8(stream){
+  const dv=new DataView(stream.buffer,stream.byteOffset,stream.byteLength);
+  let pos=0; const recs=[];
+  while(pos+4<=stream.length){
+    const type=dv.getUint16(pos,true), len=dv.getUint16(pos+2,true);
+    recs.push({type,off:pos+4,len}); pos+=4+len;
+    if(type===0x000A&&recs.length>1&&false)break;
+  }
+  // SST avec CONTINUE
+  const sst=[];
+  for(let i=0;i<recs.length;i++){
+    if(recs[i].type!==0x00FC)continue;
+    const parts=[recs[i]];
+    for(let j=i+1;j<recs.length&&recs[j].type===0x003C;j++)parts.push(recs[j]);
+    let pi=0, po=8; // saute cstTotal/cstUnique
+    const total=dv.getUint32(recs[i].off+4,true);
+    function avail(){return parts[pi].len-po}
+    function nextPart(){pi++;po=0}
+    function u8at(){return dv.getUint8(parts[pi].off+po)}
+    function u16at(){return dv.getUint16(parts[pi].off+po,true)}
+    for(let s=0;s<total;s++){
+      if(avail()<=0)nextPart();
+      if(avail()<3&&avail()>0){/* en-tête ne peut pas être scindé en pratique */}
+      let cch=u16at();po+=2;
+      if(avail()<=0){nextPart()}
+      let gr=u8at();po+=1;
+      let rt=0,sz=0;
+      if(gr&0x08){rt=u16at();po+=2}
+      if(gr&0x04){sz=dv.getUint32(parts[pi].off+po,true);po+=4}
+      let str="", wide=gr&0x01;
+      let remaining=cch;
+      while(remaining>0){
+        if(avail()<=0){nextPart(); wide=u8at()&0x01; po+=1;}
+        const take=Math.min(remaining, wide?Math.floor(avail()/2):avail());
+        if(wide){for(let k=0;k<take;k++){str+=String.fromCharCode(dv.getUint16(parts[pi].off+po,true));po+=2}}
+        else{for(let k=0;k<take;k++){str+=String.fromCharCode(dv.getUint8(parts[pi].off+po));po+=1}}
+        remaining-=take;
+      }
+      let skip=rt*4+sz;
+      while(skip>0){if(avail()<=0)nextPart();const t=Math.min(skip,avail());po+=t;skip-=t}
+      sst.push(str);
+    }
+    break;
+  }
+  // cellules — première sous-feuille seulement (fichiers FTSE : Index)
+  const cells=new Map(); // "r,c" -> val
+  function setC(r,c,v){cells.set(r+","+c,v)}
+  function rkVal(rk){
+    let v;
+    if(rk&0x02){v=(rk>>2)}
+    else{const b=new ArrayBuffer(8),d=new DataView(b);d.setUint32(4,rk&0xFFFFFFFC,true);d.setUint32(0,0,true);v=d.getFloat64(0,true)}
+    return (rk&0x01)?v/100:v;
+  }
+  let sheetCount=0, lastFormula=null;
+  for(const rec of recs){
+    if(rec.type===0x0809){sheetCount++; if(sheetCount>2)break; continue}
+    if(sheetCount!==2)continue; // workbook globals = 1, première feuille = 2
+    const o=rec.off;
+    switch(rec.type){
+      case 0x00FD:{const r=dv.getUint16(o,true),c=dv.getUint16(o+2,true),is=dv.getUint32(o+6,true);setC(r,c,sst[is]??null);break}
+      case 0x0203:{const r=dv.getUint16(o,true),c=dv.getUint16(o+2,true);setC(r,c,dv.getFloat64(o+6,true));break}
+      case 0x027E:{const r=dv.getUint16(o,true),c=dv.getUint16(o+2,true);setC(r,c,rkVal(dv.getUint32(o+6,true)));break}
+      case 0x00BD:{const r=dv.getUint16(o,true),c0=dv.getUint16(o+2,true);const nn=(rec.len-6)/6;
+        for(let k=0;k<nn;k++)setC(r,c0+k,rkVal(dv.getUint32(o+4+6*k+2,true)));break}
+      case 0x0006:{const r=dv.getUint16(o,true),c=dv.getUint16(o+2,true);
+        const b6=dv.getUint8(o+12),b7=dv.getUint16(o+12,true);
+        if(dv.getUint16(o+12,true)===0xFFFF){const t=dv.getUint8(o+6);
+          if(t===0)lastFormula={r,c}; else if(t===1)setC(r,c,!!dv.getUint8(o+8)); else lastFormula=null;}
+        else setC(r,c,dv.getFloat64(o+6,true));
+        break}
+      case 0x0207:{if(lastFormula){const cch=dv.getUint16(o,true),gr=dv.getUint8(o+2);let s="";
+        if(gr&1){for(let k=0;k<cch;k++)s+=String.fromCharCode(dv.getUint16(o+3+2*k,true))}
+        else{for(let k=0;k<cch;k++)s+=String.fromCharCode(dv.getUint8(o+3+k))}
+        setC(lastFormula.r,lastFormula.c,s);lastFormula=null}break}
+      case 0x0204:{const r=dv.getUint16(o,true),c=dv.getUint16(o+2,true),cch=dv.getUint16(o+6,true),gr=dv.getUint8(o+8);
+        let s="";if(gr&1){for(let k=0;k<cch;k++)s+=String.fromCharCode(dv.getUint16(o+9+2*k,true))}
+        else{for(let k=0;k<cch;k++)s+=String.fromCharCode(dv.getUint8(o+9+k))}
+        setC(r,c,s);break}
+    }
+  }
+  let maxR=0,maxC=0;
+  for(const k of cells.keys()){const [r,c]=k.split(",").map(Number);if(r>maxR)maxR=r;if(c>maxC)maxC=c}
+  const rows=[];
+  for(let r=0;r<=maxR;r++){const row=[];for(let c=0;c<=maxC;c++){const v=cells.get(r+","+c);row[c]=v===undefined?null:v}rows[r]=row}
+  return rows;
+}
+
+/* ======================= modèles de données ======================= */
+const S={rr:null,f:null,g:null,transco:null,date:null,withOverlay:true};
+
+function parseFtseRows(rows){
+  let hi=-1;
+  for(let i=0;i<Math.min(rows.length,30);i++) if(rows[i]&&String(rows[i][0]||"").trim()==="MACE ID"){hi=i;break}
+  if(hi<0) throw new Error("En-tête FTSE (MACE ID) introuvable");
+  const out=new Map();
+  for(let i=hi+1;i<rows.length;i++){
+    const r=rows[i]; if(!r) continue;
+    const mid=r[0];
+    if(mid==null||isNaN(parseFloat(mid)))continue;
+    out.set(String(Math.round(+mid)),{
+      isin:r[1], issue:r[2], coupon:num(r[3]), mat:r[4], ccy:r[6],
+      cbPrice:num(r[7]), parity:num(r[9]), premium:num(r[10]), delta:num(r[11]),
+      spread:num(r[12]), invVal:num(r[13]), ytmp:num(r[15]), dur:num(r[19]),
+      sp:str(r[21]), moody:str(r[22]), mcap:num(r[23]), weight:num(r[24]),
+      region:str(r[25]), sector:str(r[26]), country:str(r[27]),
+      ivol:num(r[36]), gamma:num(r[37]), vega:num(r[39])
+    });
+  }
+  return out;
+}
+function num(v){const x=typeof v==="number"?v:parseFloat(v);return isFinite(x)?x:null}
+function str(v){return v==null?"":String(v).trim()}
+
+function parseRiskReport(rows){
+  let hi=-1;
+  for(let i=0;i<Math.min(rows.length,12);i++){const r=rows[i];if(r&&r.filter(v=>v!=null).length>30){hi=i;break}}
+  if(hi<0)throw new Error("En-tête risk report introuvable");
+  let dt=null;
+  for(let i=0;i<hi;i++){const r=rows[i];if(r&&r[0]){const m=String(r[0]).match(/(\d{2})\/(\d{2})\/(\d{4})/);if(m)dt=m[0]}}
+  const cbs=[],ovl=[];
+  for(let i=hi+1;i<rows.length;i++){
+    const r=rows[i];if(!r||r[2]==null)continue;
+    const p={name:str(r[2]),issuer:str(r[3]),und:str(r[4]),isin:str(r[5]),
+      region:str(r[8]),bucket:str(r[9]),gics:str(r[10]),qty:num(r[12]),
+      parity:num(r[15]),price:num(r[16]),pureDelta:num(r[19])||0,av:num(r[20])||0,
+      pureExp:num(r[21])||0,spreadS:num(r[25]),ccy:str(r[34]),
+      deltaCash:num(r[35])||0,gamma:num(r[37])||0,gamma1:num(r[38])||0,pctAum:num(r[40])||0};
+    (p.bucket==="Long only"?cbs:ovl).push(p);
+  }
+  return {cbs,ovl,date:dt};
+}
+
+/* ======================= moteur d'analyse ======================= */
+function build(){
+  if(!(S.rr&&S.f&&S.g&&S.transco&&Object.keys(S.transco).length))return;
+  const {cbs,ovl}=S.rr;
+  const totAv=cbs.reduce((a,p)=>a+p.av,0);
+  const aum=(()=>{const p=cbs.find(x=>x.pctAum&&x.av);return p?p.av/p.pctAum:null})();
+  // jointure
+  for(const p of cbs){
+    p.mid=S.transco[p.name]||null;
+    p.fx=p.mid?S.f.get(p.mid)||null:null;
+    p.gx=p.mid?S.g.get(p.mid)||null:null;
+    p.ix=p.fx||p.gx;
+    p.w=p.av/totAv;
+    p.status=p.fx?"focus":(p.gx?"broad":"off");
+    p.sensiS=p.av?p.pureDelta/p.av:null; // sensi action Sophis
+    p.sensiF=p.ix&&p.ix.delta!=null&&p.ix.parity&&p.ix.cbPrice?p.ix.delta/100*p.ix.parity/p.ix.cbPrice:null;
+  }
+  const wavg=(arr,get,wgt)=>{let n=0,d=0;for(const x of arr){const v=get(x),w=wgt(x);if(v!=null&&isFinite(v)){n+=v*w;d+=w}}return d?n/d:null};
+  const idxW=idx=>{let n=0;for(const v of idx.values())n+=(v.weight||0);return n};
+  const istat=(idx,get)=>{let n=0,d=0;for(const v of idx.values()){const x=get(v);if(x!=null&&isFinite(x)){n+=x*(v.weight||0);d+=v.weight||0}}return d?n/d:null};
+
+  const pf={
+    n:cbs.length, totAv, aum,
+    nFocus:cbs.filter(p=>p.status==="focus").length,
+    nBroad:cbs.filter(p=>p.status==="broad").length,
+    nOff:cbs.filter(p=>p.status==="off").length,
+    overlapW:cbs.reduce((a,p)=>a+(p.fx?(p.fx.weight||0):0),0),
+    delta:wavg(cbs,p=>p.ix?p.ix.delta:null,p=>p.w),
+    premium:wavg(cbs,p=>p.ix?p.ix.premium:null,p=>p.w),
+    spread:wavg(cbs,p=>p.ix?p.ix.spread:null,p=>p.w),
+    ivol:wavg(cbs,p=>p.ix?p.ix.ivol:null,p=>p.w),
+    dur:wavg(cbs,p=>p.ix?p.ix.dur:null,p=>p.w),
+    sensiS:wavg(cbs,p=>p.sensiS,p=>p.w),
+  };
+  pf.activeShare=100-pf.overlapW;
+  const fStat={delta:istat(S.f,v=>v.delta),premium:istat(S.f,v=>v.premium),spread:istat(S.f,v=>v.spread),
+    ivol:istat(S.f,v=>v.ivol),dur:istat(S.f,v=>v.dur),n:S.f.size};
+  const gStat={delta:istat(S.g,v=>v.delta),premium:istat(S.g,v=>v.premium),spread:istat(S.g,v=>v.spread),
+    ivol:istat(S.g,v=>v.ivol),dur:istat(S.g,v=>v.dur),n:S.g.size};
+
+  // delta cash CB + overlay (hors cash)
+  const cbDeltaCash=cbs.reduce((a,p)=>a+p.pureDelta,0);
+  const ovlD=ovl.filter(p=>p.bucket==="Options"||p.bucket==="Futures");
+  const ovlCash=ovl.filter(p=>p.bucket==="Cash");
+  const ovlDeltaCash=ovlD.reduce((a,p)=>a+p.deltaCash,0);
+  const netDeltaCash=cbDeltaCash+ovlDeltaCash;
+
+  S.calc={cbs,ovl,ovlD,ovlCash,pf,fStat,gStat,aum,totAv,cbDeltaCash,ovlDeltaCash,netDeltaCash};
+  render();
+}
+
+/* ======================= helpers de rendu ======================= */
+const $=s=>document.querySelector(s);
+const fmt={
+  pct:(v,d=1)=>v==null?"·":(v*100).toFixed(d)+"%",
+  pctp:(v,d=1)=>v==null?"·":v.toFixed(d)+"%",
+  n:(v,d=1)=>v==null?"·":v.toFixed(d),
+  m:(v)=>v==null?"·":(v/1e6).toFixed(1)+" M",
+  k:(v)=>v==null?"·":(Math.abs(v)>=1e6?(v/1e6).toFixed(2)+" M":(v/1e3).toFixed(0)+" k"),
+  bp:(v)=>v==null?"·":Math.round(v)+" bp",
+  sgn:(v,d=2)=>v==null?"·":(v>0?"+":"")+v.toFixed(d),
+};
+function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}
+function tagFor(st){return st==="focus"?'<span class="tag focus">0204</span>':st==="broad"?'<span class="tag broad">0001</span>':'<span class="tag off">HORS INDICE</span>'}
+function cls(v){return v>0.0001?"pos":v<-0.0001?"neg":""}
+
+function makeTable(cols, rows, opts={}){
+  // cols: [{k,label,fmt,cls,align}], rows: objets
+  const id="t"+Math.random().toString(36).slice(2,8);
+  let sortK=opts.sort||cols[0].k, sortDir=opts.dir||-1;
+  function html(){
+    const sorted=[...rows].sort((a,b)=>{
+      const x=a[sortK],y=b[sortK];
+      if(x==null)return 1;if(y==null)return -1;
+      return (typeof x==="string"?x.localeCompare(y):x-y)*sortDir;});
+    let h='<div class="tblwrap"><table id="'+id+'"><thead><tr>';
+    for(const c of cols)h+='<th data-k="'+c.k+'" class="'+(c.k===sortK?(sortDir>0?"s-asc":"s-desc"):"")+'">'+c.label+'</th>';
+    h+='</tr></thead><tbody>';
+    for(const r of sorted){
+      h+="<tr>";
+      for(const c of cols){
+        const v=r[c.k];
+        const txt=c.fmt?c.fmt(v,r):(v==null?"·":esc(v));
+        const kl=c.cls?c.cls(v,r):"";
+        h+='<td class="'+kl+'">'+txt+"</td>";
+      }
+      h+="</tr>";
+    }
+    return h+"</tbody></table></div>";
+  }
+  setTimeout(()=>{
+    const t=document.getElementById(id);if(!t)return;
+    t.querySelectorAll("th").forEach(th=>th.addEventListener("click",()=>{
+      const k=th.dataset.k;
+      if(k===sortK)sortDir*=-1;else{sortK=k;sortDir=-1}
+      t.closest(".tblwrap").outerHTML=html();
+    }));
+  },0);
+  return html();
+}
+
+/* ------------------------- SVG charts ------------------------- */
+function svgOpen(w,h){return '<svg viewBox="0 0 '+w+" "+h+'" width="100%" height="'+h+'" role="img">'}
+function groupedBars(groups, series, colors, w=640, h=240, yFmt=v=>v.toFixed(0)){
+  // groups: [labels], series: [[v...],...]
+  const pad={l:42,r:8,t:12,b:30};
+  const maxV=Math.max(...series.flat().filter(v=>v!=null),0.0001)*1.12;
+  const gw=(w-pad.l-pad.r)/groups.length, bw=Math.min(26,(gw-14)/series.length);
+  let s=svgOpen(w,h);
+  for(let i=0;i<=4;i++){const y=pad.t+(h-pad.t-pad.b)*i/4, v=maxV*(1-i/4);
+    s+='<line x1="'+pad.l+'" y1="'+y+'" x2="'+(w-pad.r)+'" y2="'+y+'" stroke="#1E2B47" stroke-width="1"/>';
+    s+='<text x="'+(pad.l-6)+'" y="'+(y+3)+'" fill="#5A6884" font-size="9" text-anchor="end">'+yFmt(v)+"</text>";}
+  groups.forEach((g,gi)=>{
+    const cx=pad.l+gw*gi+gw/2;
+    series.forEach((sr,si)=>{
+      const v=sr[gi]||0, bh=(h-pad.t-pad.b)*v/maxV;
+      const x=cx-(series.length*bw)/2+si*bw;
+      s+='<rect x="'+x+'" y="'+(h-pad.b-bh)+'" width="'+(bw-3)+'" height="'+bh+'" fill="'+colors[si]+'" rx="1"/>';
+    });
+    s+='<text x="'+cx+'" y="'+(h-pad.b+14)+'" fill="#8292B2" font-size="9.5" text-anchor="middle">'+esc(g)+"</text>";
+  });
+  return s+"</svg>";
+}
+function hBars(items, w=640, rowH=24, vFmt=v=>v.toFixed(2)){
+  // items: [{label,v,color}] valeurs signées
+  const h=items.length*rowH+8;
+  const maxA=Math.max(...items.map(i=>Math.abs(i.v)),1e-9);
+  const lw=190, zero=lw+(w-lw-60)/2;
+  let s=svgOpen(w,h);
+  s+='<line x1="'+zero+'" y1="0" x2="'+zero+'" y2="'+h+'" stroke="#2A3A5E"/>';
+  items.forEach((it,i)=>{
+    const y=i*rowH+5, bw=Math.abs(it.v)/maxA*((w-lw-60)/2-6);
+    const x=it.v>=0?zero:zero-bw;
+    s+='<text x="'+(lw-8)+'" y="'+(y+11)+'" fill="#DCE5F5" font-size="10.5" text-anchor="end">'+esc(it.label)+"</text>";
+    s+='<rect x="'+x+'" y="'+y+'" width="'+Math.max(bw,1)+'" height="'+(rowH-10)+'" fill="'+(it.color||(it.v>=0?"#3DD68C":"#ED5C76"))+'" rx="1.5"/>';
+    s+='<text x="'+(it.v>=0?x+bw+6:x-6)+'" y="'+(y+11)+'" fill="#8292B2" font-size="10" text-anchor="'+(it.v>=0?"start":"end")+'">'+vFmt(it.v)+"</text>";
+  });
+  return s+"</svg>";
+}
+function scatter(pts, cloud, w=640, h=300, xl="Delta", yl="Prime (%)"){
+  const pad={l:46,r:10,t:10,b:34};
+  const xs=[...pts,...cloud].map(p=>p.x), ys=[...pts,...cloud].map(p=>p.y);
+  const xmax=Math.min(Math.max(...xs,1)*1.05,105), ymax=Math.min(Math.max(...ys.filter(y=>y<250),1)*1.08,200);
+  const X=v=>pad.l+(w-pad.l-pad.r)*Math.min(v,xmax)/xmax;
+  const Y=v=>h-pad.b-(h-pad.t-pad.b)*Math.min(v,ymax)/ymax;
+  let s=svgOpen(w,h);
+  for(let i=0;i<=4;i++){
+    const gx=pad.l+(w-pad.l-pad.r)*i/4, gy=pad.t+(h-pad.t-pad.b)*i/4;
+    s+='<line x1="'+gx+'" y1="'+pad.t+'" x2="'+gx+'" y2="'+(h-pad.b)+'" stroke="#16203A"/>';
+    s+='<line x1="'+pad.l+'" y1="'+gy+'" x2="'+(w-pad.r)+'" y2="'+gy+'" stroke="#16203A"/>';
+    s+='<text x="'+gx+'" y="'+(h-pad.b+14)+'" fill="#5A6884" font-size="9" text-anchor="middle">'+(xmax*i/4).toFixed(0)+"</text>";
+    s+='<text x="'+(pad.l-6)+'" y="'+(h-pad.b-(h-pad.t-pad.b)*i/4+3)+'" fill="#5A6884" font-size="9" text-anchor="end">'+(ymax*i/4).toFixed(0)+"</text>";
+  }
+  s+='<text x="'+(w/2)+'" y="'+(h-4)+'" fill="#8292B2" font-size="10" text-anchor="middle">'+xl+"</text>";
+  for(const p of cloud)s+='<circle cx="'+X(p.x)+'" cy="'+Y(p.y)+'" r="2.4" fill="#5B8DEF" opacity=".35"/>';
+  for(const p of pts){
+    s+='<circle cx="'+X(p.x)+'" cy="'+Y(p.y)+'" r="'+Math.max(3.2,Math.sqrt(p.w)*32)+'" fill="#FFB938" opacity=".9" stroke="#0A0F1C" stroke-width="1"><title>'+esc(p.t)+"</title></circle>";
+  }
+  return s+"</svg>";
+}
+
+/* échelle de convexité (signature) */
+const BUCKETS=[{k:"0–20",lo:0,hi:20,c:"#3E4F78"},{k:"20–40",lo:20,hi:40,c:"#56729F"},{k:"40–60",lo:40,hi:60,c:"#7E96C4"},{k:"60–80",lo:60,hi:80,c:"#B6C6E4"},{k:"80–100",lo:80,hi:100.01,c:"#E7EDFA"}];
+function bucketDist(items,getD,getW){
+  const out=BUCKETS.map(()=>0);let tot=0;
+  for(const it of items){const d=getD(it),w=getW(it);if(d==null||w==null)continue;
+    const bi=BUCKETS.findIndex(b=>d>=b.lo&&d<b.hi);if(bi>=0){out[bi]+=w;tot+=w}}
+  return tot?out.map(v=>v/tot*100):out;
+}
+function ladderRow(who,dist,wd,isPf){
+  let h='<div class="ladder-row"><div class="who'+(isPf?" pf":"")+'">'+who+'</div><div class="ladder-bar">';
+  dist.forEach((v,i)=>{h+='<div style="width:'+v+'%;background:'+BUCKETS[i].c+'">'+(v>=8?'<span>'+v.toFixed(0)+"%</span>":"")+"</div>"});
+  return h+'</div><div class="wd" style="color:'+(isPf?"var(--amber)":"var(--mut)")+'">Δ '+wd.toFixed(1)+"</div></div>";
+}
+
+/* ======================= rendu des sections ======================= */
+function render(){
+  const C=S.calc;if(!C)return;
+  $("#empty").style.display="none";$("#app").style.display="block";
+  $("#asof").innerHTML=S.rr.date?("risk report du <b>"+S.rr.date+"</b> · indices du <b>"+(S.date||"…")+"</b>"):"";
+
+  /* ---- KPIs ---- */
+  const netPct=C.aum?C.netDeltaCash/C.aum:null, cbPct=C.aum?C.cbDeltaCash/C.aum:null;
+  $("#kpis").innerHTML=[
+    {l:"AUM / poche CB",v:fmt.m(C.aum)+" <small>/ "+fmt.m(C.totAv)+"</small>"},
+    {l:"Souches CB",v:C.pf.n+" <small>("+C.pf.nFocus+" Focus · "+C.pf.nBroad+" 0001 · "+C.pf.nOff+" hors)</small>"},
+    {l:"Active share vs 0204",v:fmt.pctp(C.pf.activeShare,0),hero:1,cmp:"poids indice détenus : "+fmt.pctp(C.pf.overlapW)},
+    {l:"Delta pondéré (FTSE)",v:fmt.n(C.pf.delta),cmp:"0204 : <b>"+fmt.n(C.fStat.delta)+"</b> · 0001 : "+fmt.n(C.gStat.delta)},
+    {l:"Prime pondérée",v:fmt.pctp(C.pf.premium),cmp:"0204 : <b>"+fmt.pctp(C.fStat.premium)+"</b>"},
+    {l:"Spread pondéré",v:fmt.bp(C.pf.spread),cmp:"0204 : <b>"+fmt.bp(C.fStat.spread)+"</b>"},
+    {l:"Expo action nette"+(S.withOverlay?" (avec overlay)":" (CB seuls)"),v:fmt.pct(S.withOverlay?netPct:cbPct,1),hero:1,
+     cmp:"CB : "+fmt.pct(cbPct)+" · overlay : "+fmt.sgn(C.ovlDeltaCash/C.aum*100,1)+" pts"},
+  ].map(k=>'<div class="kpi'+(k.hero?" hero":"")+'"><div class="lab">'+k.l+'</div><div class="val">'+k.v+'</div>'+(k.cmp?'<div class="cmp">'+k.cmp+"</div>":"")+"</div>").join("");
+
+  /* ---- tabs ---- */
+  const TABS=[["overview","Vue d'ensemble"],["weights","Poids actifs"],["convex","Convexité"],["credit","Crédit"],
+              ["alloc","Allocation"],["universe","Gisement 0001"],["recon","Recon delta"],["overlay","Overlay dérivés"]];
+  if(!$("#tabs").innerHTML){
+    $("#tabs").innerHTML=TABS.map(([k,l],i)=>'<button data-t="'+k+'" class="'+(i===0?"on":"")+'">'+l+"</button>").join("");
+    $("#tabs").addEventListener("click",e=>{
+      const b=e.target.closest("button");if(!b)return;
+      document.querySelectorAll("#tabs button").forEach(x=>x.classList.toggle("on",x===b));
+      document.querySelectorAll("section").forEach(s=>s.classList.toggle("on",s.id==="s-"+b.dataset.t));
+    });
+    $("#s-overview").classList.add("on");
+  }
+
+  renderOverview(C); renderWeights(C); renderConvex(C); renderCredit(C);
+  renderAlloc(C); renderUniverse(C); renderRecon(C); renderOverlay(C);
+}
+
+function renderOverview(C){
+  const dPf=bucketDist(C.cbs,p=>p.ix?p.ix.delta:null,p=>p.w);
+  const dF=bucketDist([...S.f.values()],v=>v.delta,v=>v.weight);
+  const dG=bucketDist([...S.g.values()],v=>v.delta,v=>v.weight);
+  const ow=[...C.cbs].sort((a,b)=>(b.w-(b.fx?b.fx.weight/100:0))-(a.w-(a.fx?a.fx.weight/100:0)));
+  const top=ow.slice(0,6), bot=ow.slice(-4);
+  $("#s-overview").innerHTML=`
+  <div class="panel">
+    <h2>Échelle de convexité — répartition pondérée par bucket de delta</h2>
+    <div class="note">part du book (resp. de l'indice) dans chaque tranche de delta FTSE — la convexité maximale vit dans la zone 20–60.</div>
+    ${ladderRow("BG CB",dPf,C.pf.delta,true)}
+    ${ladderRow("Focus 0204",dF,C.fStat.delta,false)}
+    ${ladderRow("Global 0001",dG,C.gStat.delta,false)}
+    <div class="ladder-axis"><div></div><div><span>delta 0</span><span>20</span><span>40</span><span>60</span><span>80</span><span>100</span></div><div></div></div>
+    <div class="legend" style="margin-top:10px">${BUCKETS.map(b=>'<span><i style="background:'+b.c+'"></i>'+b.k+"</span>").join("")}</div>
+  </div>
+  <div class="grid2">
+    <div class="panel"><h2>Principales surpondérations actives</h2><div class="note">poids portefeuille − poids 0204, en points de %</div>
+      ${hBars(top.map(p=>({label:p.name.slice(0,26),v:(p.w-(p.fx?p.fx.weight/100:0))*100,color:"#FFB938"})),620,24,v=>fmt.sgn(v,2)+" pt")}</div>
+    <div class="panel"><h2>Stats croisées</h2>
+      ${makeTable([
+        {k:"m",label:"Métrique pondérée"},
+        {k:"pf",label:"BG CB",fmt:v=>v},
+        {k:"f",label:"Focus 0204",fmt:v=>v},
+        {k:"g",label:"Global 0001",fmt:v=>v}],
+        [
+        {m:"Delta",pf:fmt.n(C.pf.delta),f:fmt.n(C.fStat.delta),g:fmt.n(C.gStat.delta)},
+        {m:"Prime de conversion",pf:fmt.pctp(C.pf.premium),f:fmt.pctp(C.fStat.premium),g:fmt.pctp(C.gStat.premium)},
+        {m:"Spread crédit",pf:fmt.bp(C.pf.spread),f:fmt.bp(C.fStat.spread),g:fmt.bp(C.gStat.spread)},
+        {m:"Vol implicite",pf:fmt.pctp(C.pf.ivol),f:fmt.pctp(C.fStat.ivol),g:fmt.pctp(C.gStat.ivol)},
+        {m:"Duration",pf:fmt.n(C.pf.dur,2),f:fmt.n(C.fStat.dur,2),g:fmt.n(C.gStat.dur,2)},
+        {m:"Nb de souches",pf:String(C.pf.n),f:String(C.fStat.n),g:String(C.gStat.n)},
+        ],{sort:"m",dir:1})}
+    </div>
+  </div>`;
+}
+
+function renderWeights(C){
+  const rows=C.cbs.map(p=>({name:p.name,tag:p.status,region:p.ix?p.ix.region:p.region,
+    sector:p.ix?p.ix.sector:p.gics, wPf:p.w*100, wIx:p.fx?p.fx.weight:0,
+    act:p.w*100-(p.fx?p.fx.weight:0), delta:p.ix?p.ix.delta:null,
+    prem:p.ix?p.ix.premium:null, spr:p.ix?p.ix.spread:null, av:p.av, pctAum:p.pctAum*100}));
+  $("#s-weights").innerHTML=`
+  <div class="panel"><h2>Poids actifs vs FTSE Global Focus 0204</h2>
+  <div class="note">${C.pf.nOff?C.pf.nOff+" souche(s) totalement hors indices — vérifier la transco ou souche réellement hors gisement.":"Toutes les souches sont réconciliées par MACE ID."}
+  Les souches « 0001 » sont hors benchmark mais dans le Global — poids actif = poids portefeuille entier.</div>
+  ${makeTable([
+    {k:"name",label:"Souche",fmt:(v,r)=>esc(v)+" "+tagFor(r.tag)},
+    {k:"region",label:"Région"},{k:"sector",label:"Secteur"},
+    {k:"av",label:"AV",fmt:v=>fmt.k(v)},
+    {k:"pctAum",label:"% AUM",fmt:v=>fmt.pctp(v,2)},
+    {k:"wPf",label:"Poids book",fmt:v=>fmt.pctp(v,2)},
+    {k:"wIx",label:"Poids 0204",fmt:v=>fmt.pctp(v,2)},
+    {k:"act",label:"Actif",fmt:v=>fmt.sgn(v,2),cls:cls},
+    {k:"delta",label:"Δ FTSE",fmt:v=>fmt.n(v,0)},
+    {k:"prem",label:"Prime",fmt:v=>fmt.pctp(v,0)},
+    {k:"spr",label:"Spread",fmt:v=>fmt.bp(v)}],rows,{sort:"act",dir:-1})}</div>`;
+}
+
+function renderConvex(C){
+  const pts=C.cbs.filter(p=>p.ix&&p.ix.delta!=null&&p.ix.premium!=null)
+    .map(p=>({x:p.ix.delta,y:p.ix.premium,w:p.w,t:p.name+" — Δ"+p.ix.delta.toFixed(0)+" / prime "+p.ix.premium.toFixed(0)+"%"}));
+  const cloud=[...S.f.values()].filter(v=>v.delta!=null&&v.premium!=null).map(v=>({x:v.delta,y:v.premium}));
+  const dPf=bucketDist(C.cbs,p=>p.ix?p.ix.delta:null,p=>p.w);
+  const dF=bucketDist([...S.f.values()],v=>v.delta,v=>v.weight);
+  const dG=bucketDist([...S.g.values()],v=>v.delta,v=>v.weight);
+  $("#s-convex").innerHTML=`
+  <div class="grid2">
+    <div class="panel"><h2>Prime vs delta — book (ambre) sur nuage 0204 (bleu)</h2>
+      <div class="note">taille du point = poids dans le book ; la diagonale haute-prime/bas-delta = profil obligataire, bas-prime/haut-delta = profil action.</div>
+      ${scatter(pts,cloud)}</div>
+    <div class="panel"><h2>Distribution par bucket de delta</h2>
+      <div class="legend"><span><i style="background:#FFB938"></i>BG CB</span><span><i style="background:#5B8DEF"></i>Focus 0204</span><span><i style="background:#34D1BF"></i>Global 0001</span></div>
+      ${groupedBars(BUCKETS.map(b=>b.k),[dPf,dF,dG],["#FFB938","#5B8DEF","#34D1BF"],620,260,v=>v.toFixed(0)+"%")}
+      <div class="note" style="margin-top:8px">Vol implicite pondérée : book ${fmt.pctp(C.pf.ivol)} vs 0204 ${fmt.pctp(C.fStat.ivol)} — écart ${fmt.sgn(C.pf.ivol-C.fStat.ivol,1)} pt de vol (cherté relative payée sur le book).</div>
+    </div>
+  </div>`;
+}
+
+function renderCredit(C){
+  const rate=r=>{const s=(r||"").toUpperCase();if(!s||s==="NR"||s==="·")return"NR";
+    return /^(AAA|AA|A|BBB|BAA|AA1|AA2|AA3|A1|A2|A3|BAA1|BAA2|BAA3)/.test(s.replace(/[+-]/g,""))?"IG":"HY"};
+  const mix=(items,getR,getW)=>{const o={IG:0,HY:0,NR:0};let t=0;
+    for(const it of items){const w=getW(it);if(w==null)continue;o[rate(getR(it))]+=w;t+=w}
+    return t?{IG:o.IG/t*100,HY:o.HY/t*100,NR:o.NR/t*100}:o};
+  const mPf=mix(C.cbs,p=>p.ix?(p.ix.sp||p.ix.moody):"",p=>p.w);
+  const mF=mix([...S.f.values()],v=>v.sp||v.moody,v=>v.weight);
+  const mG=mix([...S.g.values()],v=>v.sp||v.moody,v=>v.weight);
+  const SB=[{k:"<100",lo:-1,hi:100},{k:"100–250",lo:100,hi:250},{k:"250–500",lo:250,hi:500},{k:"500–1000",lo:500,hi:1000},{k:">1000",lo:1000,hi:1e9}];
+  const sd=(items,getS,getW)=>{const out=SB.map(()=>0);let t=0;
+    for(const it of items){const s=getS(it),w=getW(it);if(s==null||w==null)continue;
+      const i=SB.findIndex(b=>s>=b.lo&&s<b.hi);if(i>=0){out[i]+=w;t+=w}}
+    return t?out.map(v=>v/t*100):out};
+  const rows=C.cbs.filter(p=>p.ix).map(p=>({name:p.name,sp:p.ix.sp||"·",moody:p.ix.moody||"·",cat:rate(p.ix.sp||p.ix.moody),
+    spr:p.ix.spread,dur:p.ix.dur,ytmp:p.ix.ytmp,w:p.w*100,sprS:p.spreadS}));
+  $("#s-credit").innerHTML=`
+  <div class="grid2">
+    <div class="panel"><h2>Répartition IG / HY / NR (pondérée)</h2>
+      <div class="legend"><span><i style="background:#FFB938"></i>BG CB</span><span><i style="background:#5B8DEF"></i>0204</span><span><i style="background:#34D1BF"></i>0001</span></div>
+      ${groupedBars(["IG","HY","NR"],[[mPf.IG,mPf.HY,mPf.NR],[mF.IG,mF.HY,mF.NR],[mG.IG,mG.HY,mG.NR]],["#FFB938","#5B8DEF","#34D1BF"],620,230,v=>v.toFixed(0)+"%")}</div>
+    <div class="panel"><h2>Distribution des spreads (bp)</h2>
+      ${groupedBars(SB.map(b=>b.k),[sd(C.cbs,p=>p.ix?p.ix.spread:null,p=>p.w),sd([...S.f.values()],v=>v.spread,v=>v.weight),sd([...S.g.values()],v=>v.spread,v=>v.weight)],["#FFB938","#5B8DEF","#34D1BF"],620,230,v=>v.toFixed(0)+"%")}
+      <div class="note" style="margin-top:8px">Spread pondéré : book ${fmt.bp(C.pf.spread)} vs 0204 ${fmt.bp(C.fStat.spread)} · duration ${fmt.n(C.pf.dur,2)} vs ${fmt.n(C.fStat.dur,2)}.</div></div>
+  </div>
+  <div class="panel"><h2>Détail crédit par souche</h2>
+  ${makeTable([
+    {k:"name",label:"Souche",fmt:v=>esc(v)},
+    {k:"sp",label:"S&P"},{k:"moody",label:"Moody's"},
+    {k:"cat",label:"Cat.",fmt:v=>v==="IG"?'<span class="tag focus">IG</span>':v==="HY"?'<span class="tag off">HY</span>':'<span class="tag cash">NR</span>'},
+    {k:"spr",label:"Spread FTSE",fmt:v=>fmt.bp(v)},
+    {k:"sprS",label:"Spread Sophis",fmt:v=>fmt.bp(v)},
+    {k:"dur",label:"Duration",fmt:v=>fmt.n(v,2)},
+    {k:"ytmp",label:"YTM/P",fmt:v=>fmt.pctp(v,2)},
+    {k:"w",label:"Poids",fmt:v=>fmt.pctp(v,2)}],rows,{sort:"spr",dir:-1})}</div>`;
+}
+
+function renderAlloc(C){
+  const agg=(items,getK,getW)=>{const o={};for(const it of items){const k=getK(it)||"n.c.",w=getW(it);if(w==null)continue;o[k]=(o[k]||0)+w}return o};
+  const norm=o=>{const t=Object.values(o).reduce((a,b)=>a+b,0)||1;const r={};for(const k in o)r[k]=o[k]/t*100;return r};
+  const rPf=norm(agg(C.cbs,p=>p.ix?p.ix.region:p.region,p=>p.w));
+  const rF=norm(agg([...S.f.values()],v=>v.region,v=>v.weight));
+  const sPf=norm(agg(C.cbs,p=>p.ix?p.ix.sector:p.gics,p=>p.w));
+  const sF=norm(agg([...S.f.values()],v=>v.sector,v=>v.weight));
+  const mk=(pf,ix)=>{const ks=[...new Set([...Object.keys(pf),...Object.keys(ix)])];
+    return ks.map(k=>({label:k,v:(pf[k]||0)-(ix[k]||0)})).sort((a,b)=>b.v-a.v)};
+  const regItems=mk(rPf,rF), secItems=mk(sPf,sF);
+  // overlay net par région (delta cash)
+  const dcReg={};
+  for(const p of C.cbs){const k=p.ix?p.ix.region:p.region;dcReg[k]=(dcReg[k]||0)+p.pureDelta}
+  const ovReg={};
+  for(const p of C.ovlD){ovReg[p.region]=(ovReg[p.region]||0)+p.deltaCash}
+  const ks=[...new Set([...Object.keys(dcReg),...Object.keys(ovReg)])];
+  const netRows=ks.map(k=>({region:k,cb:(dcReg[k]||0),ov:(ovReg[k]||0),net:(dcReg[k]||0)+(ovReg[k]||0),
+    pct:C.aum?((dcReg[k]||0)+(ovReg[k]||0))/C.aum*100:null}));
+  $("#s-alloc").innerHTML=`
+  <div class="grid2">
+    <div class="panel"><h2>Poids actifs par région (vs 0204)</h2>${hBars(regItems.map(i=>({label:i.label,v:i.v})),620,26,v=>fmt.sgn(v,1)+" pt")}</div>
+    <div class="panel"><h2>Poids actifs par secteur (vs 0204)</h2>${hBars(secItems.map(i=>({label:i.label.slice(0,24),v:i.v})),620,24,v=>fmt.sgn(v,1)+" pt")}</div>
+  </div>
+  <div class="panel"><h2>Exposition action nette par région — CB + overlay dérivés</h2>
+  <div class="note">delta cash : CB (Pure Delta Sophis) + options/futures, en valeur et en % de l'AUM.</div>
+  ${makeTable([
+    {k:"region",label:"Région"},
+    {k:"cb",label:"Δ cash CB",fmt:v=>fmt.k(v)},
+    {k:"ov",label:"Δ cash overlay",fmt:v=>fmt.k(v),cls:cls},
+    {k:"net",label:"Δ cash net",fmt:v=>fmt.k(v),cls:cls},
+    {k:"pct",label:"% AUM",fmt:v=>fmt.pctp(v,1),cls:cls}],netRows,{sort:"net",dir:-1})}</div>`;
+}
+
+function renderUniverse(C){
+  const heldMids=new Set(C.cbs.map(p=>p.mid).filter(Boolean));
+  const pool=[];
+  for(const [mid,v] of S.g){if(!S.f.has(mid))pool.push({mid,...v,held:heldMids.has(mid)})}
+  const regions=[...new Set(pool.map(p=>p.region).filter(Boolean))].sort();
+  $("#s-universe").innerHTML=`
+  <div class="panel"><h2>Gisement élargi — ${pool.length} souches du Global 0001 absentes du Focus 0204</h2>
+  <div class="note">écran d'idées hors benchmark : filtrer sur la zone de convexité (Δ 20–70, prime &lt; 60 %) et le risque crédit. Les souches déjà détenues sont marquées.</div>
+  <div class="filters">
+    <div><label>Δ min</label><input type="number" id="u-dmin" value="20"></div>
+    <div><label>Δ max</label><input type="number" id="u-dmax" value="70"></div>
+    <div><label>Prime max %</label><input type="number" id="u-pmax" value="60"></div>
+    <div><label>Spread max bp</label><input type="number" id="u-smax" value="600"></div>
+    <div><label>Région</label><select id="u-reg"><option value="">Toutes</option>${regions.map(r=>"<option>"+esc(r)+"</option>").join("")}</select></div>
+    <div class="count" id="u-count"></div>
+  </div>
+  <div id="u-table"></div></div>`;
+  const draw=()=>{
+    const dmin=+$("#u-dmin").value||0, dmax=+$("#u-dmax").value||100,
+          pmax=+$("#u-pmax").value||1e9, smax=+$("#u-smax").value||1e9, reg=$("#u-reg").value;
+    const rows=pool.filter(p=>p.delta!=null&&p.delta>=dmin&&p.delta<=dmax
+      &&(p.premium==null||p.premium<=pmax)&&(p.spread==null||p.spread<=smax)
+      &&(!reg||p.region===reg))
+      .map(p=>({issue:p.issue+(p.held?" ◆":""),isin:p.isin,region:p.region,sector:p.sector,ccy:p.ccy,
+        delta:p.delta,prem:p.premium,spr:p.spread,ivol:p.ivol,mcap:p.mcap,ytmp:p.ytmp}));
+    $("#u-count").textContent=rows.length+" souche(s)";
+    $("#u-table").innerHTML=makeTable([
+      {k:"issue",label:"Souche",fmt:v=>esc(v)},
+      {k:"isin",label:"ISIN"},{k:"region",label:"Région"},{k:"sector",label:"Secteur"},{k:"ccy",label:"Ccy"},
+      {k:"delta",label:"Δ",fmt:v=>fmt.n(v,0)},
+      {k:"prem",label:"Prime",fmt:v=>fmt.pctp(v,0)},
+      {k:"spr",label:"Spread",fmt:v=>fmt.bp(v)},
+      {k:"ivol",label:"IVol",fmt:v=>fmt.pctp(v,0)},
+      {k:"ytmp",label:"YTM/P",fmt:v=>fmt.pctp(v,1)},
+      {k:"mcap",label:"Taille $m",fmt:v=>fmt.n(v,0)}],rows,{sort:"mcap",dir:-1});
+  };
+  ["u-dmin","u-dmax","u-pmax","u-smax","u-reg"].forEach(id=>$("#"+id).addEventListener("input",draw));
+  draw();
+}
+
+function renderRecon(C){
+  const rows=C.cbs.filter(p=>p.sensiS!=null&&p.sensiF!=null)
+    .map(p=>({name:p.name,s:p.sensiS*100,f:p.sensiF*100,d:(p.sensiS-p.sensiF)*100,w:p.w*100,
+      dF:p.ix.delta,prem:p.ix.premium}));
+  $("#s-recon").innerHTML=`
+  <div class="panel"><h2>Réconciliation des sensibilités action — Sophis vs modèle FTSE</h2>
+  <div class="note">sensi Sophis = Pure Delta cash / AV de la position ; sensi FTSE = Δ × parité / prix CB. Un écart matériel signale une divergence de calibration (vol, crédit, borrow) entre ton pricing interne et le modèle indice — c'est une carte des désaccords, donc des convictions.</div>
+  ${makeTable([
+    {k:"name",label:"Souche",fmt:v=>esc(v)},
+    {k:"w",label:"Poids",fmt:v=>fmt.pctp(v,2)},
+    {k:"s",label:"Sensi Sophis",fmt:v=>fmt.pctp(v,1)},
+    {k:"f",label:"Sensi FTSE",fmt:v=>fmt.pctp(v,1)},
+    {k:"d",label:"Écart",fmt:v=>fmt.sgn(v,1)+" pt",cls:cls},
+    {k:"dF",label:"Δ FTSE",fmt:v=>fmt.n(v,0)},
+    {k:"prem",label:"Prime",fmt:v=>fmt.pctp(v,0)}],rows,{sort:"d",dir:-1})}</div>`;
+}
+
+function renderOverlay(C){
+  const rows=[...C.ovlD,...C.ovlCash].map(p=>({name:p.name,und:p.und,bucket:p.bucket,region:p.region,ccy:p.ccy,
+    qty:p.qty,dc:p.deltaCash,g1:p.gamma1,av:p.av,pct:p.pctAum*100}));
+  const gCb=C.cbs.reduce((a,p)=>a+(p.gamma1||0),0), gOv=C.ovlD.reduce((a,p)=>a+(p.gamma1||0),0);
+  $("#s-overlay").innerHTML=`
+  <div class="panel">
+    <div class="bar-h"><h2>Overlay dérivés — options &amp; futures</h2>
+      <div class="toggle"><button id="ov-on" class="${S.withOverlay?"on":""}">Avec overlay</button><button id="ov-off" class="${S.withOverlay?"":"on"}">CB seuls</button></div></div>
+    <div class="note">Le toggle pilote le KPI d'exposition nette et il documente la convention retenue : l'overlay entre dans les vues d'<i>exposition</i> (delta, allocation nette) mais jamais dans les comparaisons d'<i>univers CB</i> (poids, prime, crédit) — un call NDX n'est pas une souche du gisement.</div>
+    ${makeTable([
+      {k:"name",label:"Instrument",fmt:(v,r)=>esc(v)+" "+(r.bucket==="Options"?'<span class="tag opt">OPT</span>':r.bucket==="Futures"?'<span class="tag fut">FUT</span>':'<span class="tag cash">CASH</span>')},
+      {k:"und",label:"Sous-jacent"},{k:"region",label:"Région"},{k:"ccy",label:"Ccy"},
+      {k:"qty",label:"Qté",fmt:v=>fmt.n(v,0)},
+      {k:"dc",label:"Δ cash",fmt:v=>fmt.k(v),cls:cls},
+      {k:"g1",label:"Gamma 1%",fmt:v=>fmt.k(v),cls:cls},
+      {k:"av",label:"AV (prime/MV)",fmt:v=>fmt.k(v)},
+      {k:"pct",label:"Δ % AUM",fmt:v=>fmt.pctp(v,1),cls:cls}],rows,{sort:"dc",dir:-1})}
+  </div>
+  <div class="grid3">
+    <div class="panel"><h2>Δ cash par book</h2>${hBars([
+      {label:"Poche CB",v:C.cbDeltaCash/1e6,color:"#FFB938"},
+      {label:"Overlay options",v:C.ovlD.filter(p=>p.bucket==="Options").reduce((a,p)=>a+p.deltaCash,0)/1e6,color:"#9D7BEF"},
+      {label:"Futures",v:C.ovlD.filter(p=>p.bucket==="Futures").reduce((a,p)=>a+p.deltaCash,0)/1e6,color:"#ED5C76"},
+      {label:"NET",v:C.netDeltaCash/1e6,color:"#3DD68C"}],420,28,v=>v.toFixed(1)+" M")}</div>
+    <div class="panel"><h2>Gamma 1% par book</h2>${hBars([
+      {label:"Poche CB",v:gCb/1e6,color:"#FFB938"},
+      {label:"Overlay",v:gOv/1e6,color:"#9D7BEF"},
+      {label:"TOTAL",v:(gCb+gOv)/1e6,color:"#3DD68C"}],420,28,v=>v.toFixed(2)+" M")}
+      <div class="note" style="margin-top:8px">part de l'overlay dans le gamma total : ${fmt.pctp(gOv/((gCb+gOv)||1)*100,0)} — la convexité achetée en listé complète celle, implicite, du book CB.</div></div>
+    <div class="panel"><h2>Lecture</h2>
+      <div class="note" style="margin-bottom:0">
+      Δ cash CB : <b>${fmt.k(C.cbDeltaCash)}</b> (${fmt.pct(C.cbDeltaCash/C.aum,1)} de l'AUM)<br>
+      Δ cash overlay : <b>${fmt.k(C.ovlDeltaCash)}</b> (${fmt.sgn(C.ovlDeltaCash/C.aum*100,1)} pts)<br>
+      Δ net fonds : <b>${fmt.k(C.netDeltaCash)}</b> (${fmt.pct(C.netDeltaCash/C.aum,1)})<br><br>
+      Les futures vendus réduisent le delta sans toucher au gamma ; les calls ajoutent delta <i>et</i> gamma — l'overlay actuel est net acheteur de convexité.</div></div>
+  </div>`;
+  $("#ov-on").onclick=()=>{S.withOverlay=true;render()};
+  $("#ov-off").onclick=()=>{S.withOverlay=false;render()};
+}
+
+/* ======================= chargement fichiers ======================= */
+async function handleFile(file){
+  const name=file.name.toLowerCase();
+  const buf=await file.arrayBuffer();
+  try{
+    if(/ucbindex0204/.test(name)){S.f=parseFtseRows(parseBiff8(ole2Stream(buf,["Workbook","Book"])));mark("f",file.name);extractDate(name)}
+    else if(/ucbindex0001/.test(name)){S.g=parseFtseRows(parseBiff8(ole2Stream(buf,["Workbook","Book"])));mark("g",file.name);extractDate(name)}
+    else if(/risk_report|risk report/.test(name)||name.endsWith(".xlsx")){S.rr=parseRiskReport(await readXlsxSheet(buf,"BGCB Portfolio"));mark("rr",file.name)}
+    else if(name.endsWith(".xlsm")){
+      const rows=await readXlsxSheet(buf,"CBs"); const t={};
+      for(let i=1;i<rows.length;i++){const r=rows[i];if(r&&r[0]!=null&&r[1]!=null)t[String(r[1]).trim()]=String(Math.round(+r[0]))}
+      if(Object.keys(t).length){S.transco=t;mark("tr",file.name+" ("+Object.keys(t).length+" lignes)")}
+    }
+    else if(name.endsWith(".xls")){ // UCBINDEX renommé ? tenter par contenu
+      const rows=parseFtseRows(parseBiff8(ole2Stream(buf,["Workbook","Book"])));
+      if(!S.f){S.f=rows;mark("f",file.name)}else{S.g=rows;mark("g",file.name)}
+    }
+  }catch(e){console.error(e);markErr(file.name,e.message)}
+  build();
+}
+function extractDate(name){const m=name.match(/_(\d{4})(\d{2})(\d{2})/);if(m)S.date=m[3]+"/"+m[2]+"/"+m[1]}
+function mark(slot,label){const c=$("#chip-"+slot);c.classList.add("ok");c.classList.remove("err");
+  c.innerHTML=c.innerHTML.replace(/<small>.*<\/small>/,"<small>"+esc(label)+"</small>")}
+function markErr(label,msg){const hint=$("#drop-hint");hint.textContent="Erreur sur "+label+" : "+msg;hint.style.color="var(--red)"}
+
+document.addEventListener("dragover",e=>{e.preventDefault();document.body.classList.add("dragging")});
+document.addEventListener("dragleave",e=>{if(e.target===document.body)document.body.classList.remove("dragging")});
+document.addEventListener("drop",async e=>{e.preventDefault();document.body.classList.remove("dragging");
+  for(const f of e.dataTransfer.files)await handleFile(f)});
+$("#filebar").addEventListener("click",e=>{if(e.target.closest(".chip"))$("#fpick").click()});
+$("#fpick").addEventListener("change",async e=>{for(const f of e.target.files)await handleFile(f);e.target.value=""});
+</script>
+</body>
+</html>
