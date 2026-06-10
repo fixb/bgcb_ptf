@@ -147,6 +147,7 @@ Tout est calculé localement dans le navigateur — aucune donnée ne quitte le 
 <div id="app" style="display:none">
   <div id="kpis"></div>
   <nav id="tabs"></nav>
+  <section id="s-recap"></section>
   <section id="s-overview"></section>
   <section id="s-weights"></section>
   <section id="s-convex"></section>
@@ -610,7 +611,7 @@ function render(){
   ].map(k=>'<div class="kpi'+(k.hero?" hero":"")+'"><div class="lab">'+k.l+'</div><div class="val">'+k.v+'</div>'+(k.cmp?'<div class="cmp">'+k.cmp+"</div>":"")+"</div>").join("");
 
   /* ---- tabs ---- */
-  const TABS=[["overview","Vue d'ensemble"],["weights","Poids actifs"],["convex","Convexité"],["credit","Crédit"],
+  const TABS=[["recap","Récap hebdo"],["overview","Vue d'ensemble"],["weights","Poids actifs"],["convex","Convexité"],["credit","Crédit"],
               ["alloc","Allocation"],["universe","Gisement 0001"],["recon","Recon delta"],["overlay","Overlay dérivés"]];
   if(!$("#tabs").innerHTML){
     $("#tabs").innerHTML=TABS.map(([k,l],i)=>'<button data-t="'+k+'" class="'+(i===0?"on":"")+'">'+l+"</button>").join("");
@@ -619,11 +620,163 @@ function render(){
       document.querySelectorAll("#tabs button").forEach(x=>x.classList.toggle("on",x===b));
       document.querySelectorAll("section").forEach(s=>s.classList.toggle("on",s.id==="s-"+b.dataset.t));
     });
-    $("#s-overview").classList.add("on");
+    $("#s-recap").classList.add("on");
   }
 
+  renderRecap(C);
   renderOverview(C); renderWeights(C); renderConvex(C); renderCredit(C);
   renderAlloc(C); renderUniverse(C); renderRecon(C); renderOverlay(C);
+}
+
+/* ---- récap hebdo : réplique de l'onglet Summary du « Weekly Call BGCB » ---- */
+const RECAP_REGIONS=["US","Europe","Japan","Asia ex Japan","Other Markets"];
+function recapRegion(r){
+  const s=str(r).toUpperCase();
+  if(!s)return"n.c.";
+  const exact=RECAP_REGIONS.find(k=>k.toUpperCase()===s);
+  if(exact)return exact;
+  if(/ASIA|PACIFIC|CHINA|HONG ?KONG|TAIWAN|KOREA|INDIA|SINGAPORE/.test(s))return"Asia ex Japan";
+  if(/JAPAN|JAPON/.test(s))return"Japan";
+  if(/^(US|USA)$|UNITED STATES|NORTH AMERIC|AMERICA/.test(s))return"US";
+  if(/EUROPE|EMEA|FRANCE|GERMANY|UNITED KINGDOM|SWITZERLAND|ITALY|SPAIN|NETHERLANDS|NORDIC/.test(s)||s==="UK")return"Europe";
+  return"Other Markets";
+}
+function computeRecap(C){
+  const aum=C.aum||C.totAv||1;
+  const sprOf=p=>p.ix&&p.ix.spread!=null?p.ix.spread:p.spreadS;
+  const durOf=p=>p.ix?p.ix.dur:null;
+  // variation relative de prix si les spreads s'écartent de 10 % (approx. duration crédit × Δspread)
+  const mv=(d,s)=>(d!=null&&s!=null&&isFinite(d)&&isFinite(s))?-(d*s*0.1)/10000:null;
+
+  const zone={}; const Z=k=>zone[k]||(zone[k]={aPf:0,aIx:0,dPf:0,dIx:0,sN:0,sD:0,siN:0,siD:0,stPf:0,stIx:0});
+  for(const p of C.cbs){
+    const z=Z(recapRegion(p.ix?p.ix.region:p.region));
+    z.aPf+=p.av/aum; z.dPf+=p.pureDelta/aum;
+    const s=sprOf(p);
+    if(s!=null){z.sN+=s*p.av;z.sD+=p.av}
+    const m=mv(durOf(p),s);if(m!=null)z.stPf+=p.av/aum*m;
+  }
+  for(const p of C.ovlD){const z=Z(recapRegion(p.region));z.dPf+=p.deltaCash/aum;z.aPf+=p.deltaCash/aum}
+  for(const v of S.f.values()){
+    const z=Z(recapRegion(v.region)), w=(v.weight||0)/100;
+    z.aIx+=w;
+    if(v.delta!=null&&v.parity&&v.cbPrice)z.dIx+=w*(v.delta/100*v.parity/v.cbPrice);
+    if(v.spread!=null){z.siN+=v.spread*w;z.siD+=w}
+    const m=mv(v.dur,v.spread);if(m!=null)z.stIx+=w*m;
+  }
+  const order=[...RECAP_REGIONS,...Object.keys(zone).filter(k=>!RECAP_REGIONS.includes(k)).sort()];
+  const rows=order.filter(k=>zone[k]).map(k=>{const z=zone[k];return{k,aPf:z.aPf,aIx:z.aIx,dPf:z.dPf,dIx:z.dIx,
+    sPf:z.sD?z.sN/z.sD:null,sIx:z.siD?z.siN/z.siD:null,stPf:z.stPf,stIx:z.stIx}});
+  const sum=f=>rows.reduce((a,r)=>a+f(r),0);
+  const tot={aPf:sum(r=>r.aPf),aIx:sum(r=>r.aIx),dPf:sum(r=>r.dPf),dIx:sum(r=>r.dIx),stPf:sum(r=>r.stPf),stIx:sum(r=>r.stIx)};
+  {let n=0,d=0;for(const p of C.cbs){const s=sprOf(p);if(s!=null){n+=s*p.av;d+=p.av}}tot.sPf=d?n/d:null}
+  {let n=0,d=0;for(const v of S.f.values()){if(v.spread!=null){n+=v.spread*(v.weight||0);d+=v.weight||0}}tot.sIx=d?n/d:null}
+
+  // top 10 sous-jacents en delta (CB + overlay), comme le 3.3 du Summary
+  const und={};
+  for(const p of C.cbs){const k=p.und||p.name;und[k]=(und[k]||0)+p.pureDelta/aum}
+  for(const p of C.ovlD){const k=p.und||p.name;und[k]=(und[k]||0)+p.deltaCash/aum}
+  const topUnd=Object.entries(und).sort((a,b)=>Math.abs(b[1])-Math.abs(a[1])).slice(0,10);
+
+  // par émetteur : stress spread +10 % (5.3) et default loss recovery 0 (5.4)
+  const iss={};
+  for(const p of C.cbs){
+    const o=iss[p.issuer||p.name]||(iss[p.issuer||p.name]={pct:0,sN:0,sD:0,st:0});
+    o.pct+=p.pctAum||p.av/aum;
+    const s=sprOf(p);
+    if(s!=null){o.sN+=s*p.av;o.sD+=p.av}
+    const m=mv(durOf(p),s);if(m!=null)o.st+=p.av/aum*m;
+  }
+  const issuers=Object.entries(iss).map(([k,o])=>({k,pct:o.pct,spr:o.sD?o.sN/o.sD:null,st:o.st}));
+  const topStress=[...issuers].sort((a,b)=>a.st-b.st).slice(0,10);
+  const topDefault=[...issuers].sort((a,b)=>b.pct-a.pct).slice(0,10);
+
+  // greeks (6.) — ce qui est calculable depuis Sophis + modèle FTSE
+  const wavg=(arr,get,wgt)=>{let n=0,d=0;for(const x of arr){const v=get(x),w=wgt(x);if(v!=null&&isFinite(v)){n+=v*w;d+=w}}return d?n/d:null};
+  const iw=get=>{let n=0,d=0;for(const v of S.f.values()){const x=get(v);if(x!=null&&isFinite(x)){n+=x*(v.weight||0);d+=v.weight||0}}return d?n/d:null};
+  const gCb=C.cbs.reduce((a,p)=>a+(p.gamma1||0),0), gOv=C.ovlD.reduce((a,p)=>a+(p.gamma1||0),0);
+  const greeks=[
+    {m:"Gamma cash — move 1 % (% AUM, CB + overlay)",pf:(gCb+gOv)/aum*100,ix:null,d:2,u:" %"},
+    {m:"Vega par point de vol (modèle FTSE, pondéré AV)",pf:wavg(C.cbs,p=>p.ix?p.ix.vega:null,p=>p.w),ix:iw(v=>v.vega),d:2},
+    {m:"Duration to Next Put/Mat",pf:C.pf.dur,ix:C.fStat.dur,d:2},
+    {m:"YTM/P pondéré par l'AV",pf:wavg(C.cbs,p=>p.ix?p.ix.ytmp:null,p=>p.w),ix:iw(v=>v.ytmp),d:2,u:" %"},
+    {m:"Prime de conversion pondérée par l'AV",pf:C.pf.premium,ix:C.fStat.premium,d:1,u:" %"},
+    {m:"Vol implicite pondérée par l'AV",pf:C.pf.ivol,ix:C.fStat.ivol,d:1,u:" %"},
+  ];
+  const cashAv=C.ovlCash.reduce((a,p)=>a+p.av,0)/aum;
+  return {aum,cashAv,rows,tot,topUnd,topStress,topDefault,greeks};
+}
+
+function renderRecap(C){
+  const r=computeRecap(C);
+  const P=v=>fmt.pct(v,1), P2=v=>fmt.pct(v,2);
+  const sT=(cols,rows)=>{
+    let h='<div class="tblwrap"><table><thead><tr>'+cols.map(c=>'<th>'+c+"</th>").join("")+"</tr></thead><tbody>";
+    for(const row of rows)h+="<tr>"+row.map(c=>'<td class="'+((c&&c.cls)||"")+'">'+((c&&c.t!==undefined)?c.t:(c==null?"·":c))+"</td>").join("")+"</tr>";
+    return h+"</tbody></table></div>";
+  };
+  const b=t=>"<b>"+t+"</b>";
+  const off=(num,lab,why)=>'<div><h2 style="color:var(--mut)">'+num+". "+lab+'</h2><div class="note" style="margin-bottom:0">'+why+"</div></div>";
+  $("#s-recap").innerHTML=`
+  <div class="panel">
+    <h2>Weekly Call BGCB — récapitulatif</h2>
+    <div class="note">réplique de l'onglet <i>Summary</i> du classeur hebdo, recalculée depuis le risk report Sophis + indices FTSE.
+    AUM <b>${fmt.m(C.aum)}</b> · cash disponible <b>${P(r.cashAv)}</b> · risk report du <b>${esc(S.rr.date||"…")}</b> · indices du <b>${esc(S.date||"…")}</b>.</div>
+    <div class="grid2">
+      ${off(1,"Official Performance","non calculable ici — séries de prix absentes des fichiers chargés (source : fichier perf Bloomberg / hub Performance).")}
+      ${off(2,"Over/Under Performance vs Benchmark","non calculable ici — nécessite la PnL Misys (fichier PnL Followers).")}
+    </div>
+  </div>
+  <div class="grid2">
+    <div class="panel"><h2>3.1. Allocation équivalente par région vs benchmark</h2>
+      <div class="note">CB en valeur d'actif + dérivés en équivalent delta, en % de l'AUM — vs poids FTSE Global Focus. Le détail par stratégie (in CB1 CREDIT…) nécessite le book Misys.</div>
+      ${sT(["Région","BGCB","FTSE Global Focus"],[
+        ...r.rows.map(z=>[esc(z.k),P(z.aPf),P(z.aIx)]),
+        [b("Total"),{t:b(P(r.tot.aPf))},{t:b(P(r.tot.aIx))}]])}
+    </div>
+    <div class="panel"><h2>3.2. Delta par région vs benchmark</h2>
+      <div class="note">BGCB : pure delta Sophis + overlay dérivés, en % AUM (incl. arbitrage) · benchmark : Δ × parité / prix CB, pondéré.</div>
+      ${sT(["Région","BGCB","FTSE Global Focus"],[
+        ...r.rows.map(z=>[esc(z.k),{t:P(z.dPf),cls:cls(z.dPf)},P(z.dIx)]),
+        [b("Total"),{t:b(P(r.tot.dPf)),cls:cls(r.tot.dPf)},{t:b(P(r.tot.dIx))}]])}
+    </div>
+  </div>
+  <div class="grid2">
+    <div class="panel"><h2>3.3. Top 10 sous-jacents en delta — incl. options &amp; futures</h2>
+      ${sT(["Sous-jacent","Delta % AUM"],r.topUnd.map(([k,v])=>[esc(k),{t:P2(v),cls:cls(v)}]))}</div>
+    <div class="panel"><h2>4. Duration</h2>
+      ${sT(["","BGCB","FTSE Global Focus"],[["Duration",b(fmt.n(C.pf.dur,2)),fmt.n(C.fStat.dur,2)]])}
+      <div class="note" style="margin-top:8px">duration FTSE (to next put/mat) pondérée par l'AV — les durations des concurrents (DWS, Lazard, LO) restent à saisir à la main.</div></div>
+  </div>
+  <div class="grid2">
+    <div class="panel"><h2>5.1. Spread de crédit par région</h2>
+      <div class="note">spread moyen pondéré par l'AV (spread FTSE, à défaut Sophis).</div>
+      ${sT(["Région","BGCB","FTSE Global Focus"],[
+        ...r.rows.map(z=>[esc(z.k),fmt.bp(z.sPf),fmt.bp(z.sIx)]),
+        [b("Total pondéré"),{t:b(fmt.bp(r.tot.sPf))},{t:b(fmt.bp(r.tot.sIx))}]])}</div>
+    <div class="panel"><h2>5.2. Stress test — spreads de crédit +10 % (en relatif)</h2>
+      <div class="note">approximation duration crédit × Δspread — le classeur hebdo utilise le repricing Sophis.</div>
+      ${sT(["Région","BGCB","FTSE Global Focus"],[
+        ...r.rows.map(z=>[esc(z.k),{t:P2(z.stPf),cls:cls(z.stPf)},{t:P2(z.stIx),cls:cls(z.stIx)}]),
+        [b("Total"),{t:b(P2(r.tot.stPf)),cls:cls(r.tot.stPf)},{t:b(P2(r.tot.stIx)),cls:cls(r.tot.stIx)}]])}</div>
+  </div>
+  <div class="grid2">
+    <div class="panel"><h2>5.3. Stress test — top 10 émetteurs si spreads +10 %</h2>
+      ${sT(["Émetteur","Spread","Valeur d'actif","Impact (rel.)"],
+        r.topStress.map(i=>[esc(i.k),fmt.bp(i.spr),P2(i.pct),{t:P2(i.st),cls:cls(i.st)}]))}</div>
+    <div class="panel"><h2>5.4. Default loss (recovery 0 %, spot inchangé)</h2>
+      <div class="note">perte = valeur d'actif de l'émetteur — pas de couverture short action dans le book long only.</div>
+      ${sT(["Émetteur","En % AUM"],r.topDefault.map(i=>[esc(i.k),{t:P2(-i.pct),cls:"neg"}]))}</div>
+  </div>
+  <div class="panel"><h2>6. Greeks vs benchmark</h2>
+    ${sT(["","BGCB","FTSE Global Focus"],r.greeks.map(g=>[g.m,
+      g.pf==null?"n.d.":{t:b(fmt.n(g.pf,g.d)+(g.u||""))},
+      g.ix==null?"n.d.":fmt.n(g.ix,g.d)+(g.u||"")]))}
+    <div class="note" style="margin-top:8px">rho, thétas (optional / credit / driftless), sensi crédit Sophis et stress spot ±20 % restent à brancher (source Misys, absente des fichiers chargés).</div></div>
+  <div class="grid2">
+    <div class="panel">${off(7,"Beta — 90 jours glissants","non calculable ici — nécessite un historique de VL (hub Performance).")}</div>
+    <div class="panel">${off(8,"Trades de la semaine","non calculable ici — nécessite deux risk reports successifs pour différencier les positions.")}</div>
+  </div>`;
 }
 
 function renderOverview(C){
@@ -911,6 +1064,45 @@ function exportXls(){
     ["Expo action nette — avec overlay (%)",R(C.aum?C.netDeltaCash/C.aum*100:null,1),null,null],
   ]);
 
+  // 1bis. Récap hebdo — réplique de l'onglet Summary du Weekly Call BGCB
+  const rc=computeRecap(C);
+  const rcr=[];
+  const push=(...r)=>rcr.push(r);
+  push("Weekly Call BGCB — Récapitulatif",S.rr&&S.rr.date?S.rr.date:null);
+  push("Fund AUMs (€)",R(C.aum,0));
+  push("Cash disponible (% AUM)",R(rc.cashAv*100,1));
+  push();
+  push("3.1 Allocation équivalente par région (% AUM, CB en AV + dérivés en équiv. delta)","BGCB","FTSE Global Focus");
+  for(const z of rc.rows)push(z.k,R(z.aPf*100,1),R(z.aIx*100,1));
+  push("Total",R(rc.tot.aPf*100,1),R(rc.tot.aIx*100,1));
+  push();
+  push("3.2 Delta par région (% AUM)","BGCB","FTSE Global Focus");
+  for(const z of rc.rows)push(z.k,R(z.dPf*100,1),R(z.dIx*100,1));
+  push("Total",R(rc.tot.dPf*100,1),R(rc.tot.dIx*100,1));
+  push();
+  push("3.3 Top 10 sous-jacents en delta","Delta % AUM");
+  for(const [k,v] of rc.topUnd)push(k,R(v*100,2));
+  push();
+  push("4. Duration",R(C.pf.dur,2),R(C.fStat.dur,2));
+  push();
+  push("5.1 Spread crédit par région (bp)","BGCB","FTSE Global Focus");
+  for(const z of rc.rows)push(z.k,R(z.sPf,0),R(z.sIx,0));
+  push("Total pondéré",R(rc.tot.sPf,0),R(rc.tot.sIx,0));
+  push();
+  push("5.2 Stress spreads +10 % (% rel., approx. duration × Δspread)","BGCB","FTSE Global Focus");
+  for(const z of rc.rows)push(z.k,R(z.stPf*100,3),R(z.stIx*100,3));
+  push("Total",R(rc.tot.stPf*100,3),R(rc.tot.stIx*100,3));
+  push();
+  push("5.3 Top 10 émetteurs — stress spreads +10 %","Spread bp","Valeur d'actif %","Impact % rel.");
+  for(const i of rc.topStress)push(i.k,R(i.spr,0),R(i.pct*100,2),R(i.st*100,3));
+  push();
+  push("5.4 Default loss (recovery 0 %, spot inchangé)","En % AUM");
+  for(const i of rc.topDefault)push(i.k,R(-i.pct*100,2));
+  push();
+  push("6. Greeks","BGCB","FTSE Global Focus");
+  for(const g of rc.greeks)push(g.m,R(g.pf,g.d),R(g.ix,g.d));
+  const recap=xlsSheet("Récap hebdo",["Réplique de l'onglet Summary","","",""],rcr);
+
   // 2. Poids actifs vs 0204
   const weights=xlsSheet("Poids actifs",
     ["Souche","Statut","Région","Secteur","AV","% AUM","Poids book %","Poids 0204 %","Actif (pt)","Δ FTSE","Prime %","Spread bp"],
@@ -960,7 +1152,7 @@ function exportXls(){
   const xml='<?xml version="1.0"?>\n<?mso-application progid="Excel.Sheet"?>\n'
     +'<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">'
     +'<Styles><Style ss:ID="hdr"><Font ss:Bold="1"/><Interior ss:Color="#DDDDDD" ss:Pattern="Solid"/></Style></Styles>'
-    +synthese+weights+credit+recon+overlay+universe+alloc+'</Workbook>';
+    +recap+synthese+weights+credit+recon+overlay+universe+alloc+'</Workbook>';
 
   const blob=new Blob(["﻿"+xml],{type:"application/vnd.ms-excel"});
   const url=URL.createObjectURL(blob);
