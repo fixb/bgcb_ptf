@@ -28,6 +28,9 @@ header{border-bottom:1px solid var(--line);padding:18px 0 14px;display:flex;flex
 .sub{color:var(--mut);font-size:11.5px;letter-spacing:.04em}
 .asof{margin-left:auto;color:var(--mut);font-size:11.5px}
 .asof b{color:var(--ink)}
+#exportBtn{display:none;font-family:var(--mono);font-size:11.5px;letter-spacing:.04em;background:var(--panel2);color:var(--amber);border:1px solid var(--amber2);border-radius:4px;padding:7px 13px;cursor:pointer;transition:background .15s,color .15s}
+#exportBtn:hover{background:var(--amber2);color:#04101f}
+#exportBtn:focus-visible{outline:1px solid var(--amber);outline-offset:1px}
 
 /* ---------- file chips ---------- */
 #filebar{display:flex;flex-wrap:wrap;gap:10px;padding:14px 0;border-bottom:1px solid var(--line)}
@@ -126,6 +129,7 @@ svg text{font-family:var(--mono)}
   <div class="brand">BG&nbsp;CB <b>/</b> INDEX COMPARE</div>
   <div class="sub">portefeuille vs FTSE Global Focus (0204) &amp; FTSE Global (0001)</div>
   <div class="asof" id="asof"></div>
+  <button id="exportBtn" title="Exporter toutes les vues en classeur Excel">⤓ Export XLS</button>
 </header>
 
 <div id="filebar">
@@ -589,7 +593,7 @@ function ladderRow(who,dist,wd,isPf){
 /* ======================= rendu des sections ======================= */
 function render(){
   const C=S.calc;if(!C)return;
-  $("#empty").style.display="none";$("#app").style.display="block";
+  $("#empty").style.display="none";$("#app").style.display="block";$("#exportBtn").style.display="inline-block";
   $("#asof").innerHTML=S.rr.date?("risk report du <b>"+S.rr.date+"</b> · indices du <b>"+(S.date||"…")+"</b>"):"";
 
   /* ---- KPIs ---- */
@@ -867,6 +871,106 @@ function renderOverlay(C){
   $("#ov-on").onclick=()=>{S.withOverlay=true;render()};
   $("#ov-off").onclick=()=>{S.withOverlay=false;render()};
 }
+
+/* ======================= export Excel (SpreadsheetML 2003) ======================= */
+const R=(v,d=2)=>(v==null||!isFinite(v))?null:+(+v).toFixed(d);
+function xmlEsc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}
+function xlsCell(v){
+  if(v==null||v==="")return '<Cell><Data ss:Type="String"></Data></Cell>';
+  if(typeof v==="number"&&isFinite(v))return '<Cell><Data ss:Type="Number">'+v+'</Data></Cell>';
+  return '<Cell><Data ss:Type="String">'+xmlEsc(v)+'</Data></Cell>';
+}
+function xlsSheet(name,cols,rows){
+  const safe=String(name).replace(/[\[\]\*\/\\\?:]/g,"-").slice(0,31);
+  let x='<Worksheet ss:Name="'+xmlEsc(safe)+'"><Table>';
+  x+='<Row>'+cols.map(c=>'<Cell ss:StyleID="hdr"><Data ss:Type="String">'+xmlEsc(c)+'</Data></Cell>').join("")+'</Row>';
+  for(const r of rows)x+='<Row>'+r.map(xlsCell).join("")+'</Row>';
+  return x+'</Table></Worksheet>';
+}
+function exportXls(){
+  const C=S.calc;if(!C)return;
+  const statusLab=st=>st==="focus"?"Focus 0204":st==="broad"?"0001":"Hors indice";
+
+  // 1. Synthèse — métriques pondérées et exposition
+  const synthese=xlsSheet("Synthèse",["Métrique","BG CB","Focus 0204","Global 0001"],[
+    ["AUM (€)",R(C.aum,0),null,null],
+    ["Poche CB / AV (€)",R(C.totAv,0),null,null],
+    ["Nb de souches",C.pf.n,C.fStat.n,C.gStat.n],
+    ["dont Focus 0204 / 0001 / hors",C.pf.nFocus,C.pf.nBroad,C.pf.nOff],
+    ["Active share vs 0204 (%)",R(C.pf.activeShare,1),null,null],
+    ["Poids indice détenus (%)",R(C.pf.overlapW,1),null,null],
+    ["Delta pondéré",R(C.pf.delta,1),R(C.fStat.delta,1),R(C.gStat.delta,1)],
+    ["Prime de conversion (%)",R(C.pf.premium,1),R(C.fStat.premium,1),R(C.gStat.premium,1)],
+    ["Spread crédit (bp)",R(C.pf.spread,0),R(C.fStat.spread,0),R(C.gStat.spread,0)],
+    ["Vol implicite (%)",R(C.pf.ivol,1),R(C.fStat.ivol,1),R(C.gStat.ivol,1)],
+    ["Duration",R(C.pf.dur,2),R(C.fStat.dur,2),R(C.gStat.dur,2)],
+    ["Δ cash CB (€)",R(C.cbDeltaCash,0),null,null],
+    ["Δ cash overlay (€)",R(C.ovlDeltaCash,0),null,null],
+    ["Δ cash net (€)",R(C.netDeltaCash,0),null,null],
+    ["Expo action nette — CB seuls (%)",R(C.aum?C.cbDeltaCash/C.aum*100:null,1),null,null],
+    ["Expo action nette — avec overlay (%)",R(C.aum?C.netDeltaCash/C.aum*100:null,1),null,null],
+  ]);
+
+  // 2. Poids actifs vs 0204
+  const weights=xlsSheet("Poids actifs",
+    ["Souche","Statut","Région","Secteur","AV","% AUM","Poids book %","Poids 0204 %","Actif (pt)","Δ FTSE","Prime %","Spread bp"],
+    C.cbs.map(p=>[p.name,statusLab(p.status),p.ix?p.ix.region:p.region,p.ix?p.ix.sector:p.gics,
+      R(p.av,0),R(p.pctAum*100,3),R(p.w*100,3),R(p.fx?p.fx.weight:0,3),R(p.w*100-(p.fx?p.fx.weight:0),3),
+      R(p.ix?p.ix.delta:null,0),R(p.ix?p.ix.premium:null,1),R(p.ix?p.ix.spread:null,0)]));
+
+  // 3. Crédit par souche
+  const rate=r=>{const s=(r||"").toUpperCase();if(!s||s==="NR")return"NR";
+    return /^(AAA|AA|A|BBB|BAA|AA1|AA2|AA3|A1|A2|A3|BAA1|BAA2|BAA3)/.test(s.replace(/[+-]/g,""))?"IG":"HY"};
+  const credit=xlsSheet("Crédit",
+    ["Souche","S&P","Moody's","Cat.","Spread FTSE bp","Spread Sophis bp","Duration","YTM/P %","Poids %"],
+    C.cbs.filter(p=>p.ix).map(p=>[p.name,p.ix.sp||"",p.ix.moody||"",rate(p.ix.sp||p.ix.moody),
+      R(p.ix.spread,0),R(p.spreadS,0),R(p.ix.dur,2),R(p.ix.ytmp,2),R(p.w*100,3)]));
+
+  // 4. Réconciliation des sensibilités
+  const recon=xlsSheet("Recon delta",
+    ["Souche","Poids %","Sensi Sophis %","Sensi FTSE %","Écart pt","Δ FTSE","Prime %"],
+    C.cbs.filter(p=>p.sensiS!=null&&p.sensiF!=null).map(p=>[p.name,R(p.w*100,3),
+      R(p.sensiS*100,1),R(p.sensiF*100,1),R((p.sensiS-p.sensiF)*100,1),R(p.ix.delta,0),R(p.ix.premium,1)]));
+
+  // 5. Overlay dérivés
+  const overlay=xlsSheet("Overlay",
+    ["Instrument","Sous-jacent","Bucket","Région","Ccy","Qté","Δ cash","Gamma 1%","AV","Δ % AUM"],
+    [...C.ovlD,...C.ovlCash].map(p=>[p.name,p.und,p.bucket,p.region,p.ccy,
+      R(p.qty,0),R(p.deltaCash,0),R(p.gamma1,0),R(p.av,0),R(p.pctAum*100,2)]));
+
+  // 6. Gisement 0001 (souches du Global absentes du Focus)
+  const heldMids=new Set(C.cbs.map(p=>p.mid).filter(Boolean));
+  const pool=[];
+  for(const [mid,v] of S.g){if(!S.f.has(mid))pool.push([v.issue,v.isin,v.region,v.sector,v.ccy,
+    heldMids.has(mid)?"oui":"",R(v.delta,0),R(v.premium,1),R(v.spread,0),R(v.ivol,1),R(v.ytmp,1),R(v.mcap,0)])}
+  const universe=xlsSheet("Gisement 0001",
+    ["Souche","ISIN","Région","Secteur","Ccy","Détenu","Δ","Prime %","Spread bp","IVol %","YTM/P %","Taille $m"],pool);
+
+  // 7. Allocation — exposition action nette par région (CB + overlay)
+  const dcReg={},ovReg={};
+  for(const p of C.cbs){const k=(p.ix?p.ix.region:p.region)||"n.c.";dcReg[k]=(dcReg[k]||0)+p.pureDelta}
+  for(const p of C.ovlD){const k=p.region||"n.c.";ovReg[k]=(ovReg[k]||0)+p.deltaCash}
+  const allocRows=[...new Set([...Object.keys(dcReg),...Object.keys(ovReg)])].map(k=>{
+    const net=(dcReg[k]||0)+(ovReg[k]||0);
+    return [k,R(dcReg[k]||0,0),R(ovReg[k]||0,0),R(net,0),R(C.aum?net/C.aum*100:null,1)];
+  }).sort((a,b)=>(b[3]||0)-(a[3]||0));
+  const alloc=xlsSheet("Allocation région",
+    ["Région","Δ cash CB","Δ cash overlay","Δ cash net","% AUM"],allocRows);
+
+  const xml='<?xml version="1.0"?>\n<?mso-application progid="Excel.Sheet"?>\n'
+    +'<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">'
+    +'<Styles><Style ss:ID="hdr"><Font ss:Bold="1"/><Interior ss:Color="#DDDDDD" ss:Pattern="Solid"/></Style></Styles>'
+    +synthese+weights+credit+recon+overlay+universe+alloc+'</Workbook>';
+
+  const blob=new Blob(["﻿"+xml],{type:"application/vnd.ms-excel"});
+  const url=URL.createObjectURL(blob);
+  const d=(S.rr&&S.rr.date?S.rr.date:"").replace(/\//g,"-");
+  const a=document.createElement("a");
+  a.href=url;a.download="BGCB_index_compare"+(d?"_"+d:"")+".xls";
+  document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+$("#exportBtn").addEventListener("click",exportXls);
 
 /* ======================= chargement fichiers ======================= */
 async function handleFile(file){
