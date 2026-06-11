@@ -456,8 +456,14 @@ function perfHorizons(T){
     ["Rolling Month",dateToSerial(new Date(Date.UTC(y,m-1,dT.getUTCDate())))],
     ["MTD",dateToSerial(new Date(Date.UTC(y,m,0)))],
     ["WTD / Rolling Week",T-((((dT.getUTCDay()-5+7)%7)||7))], // depuis le vendredi précédent
+    // long terme : 3e élément = nb d'années (déclenche l'affichage annualisé) — à garder en fin de liste, le §2 indexe [3]
+    ["3 ans",dateToSerial(new Date(Date.UTC(y-3,m,dT.getUTCDate()))),3],
+    ["5 ans",dateToSerial(new Date(Date.UTC(y-5,m,dT.getUTCDate()))),5],
+    ["7 ans",dateToSerial(new Date(Date.UTC(y-7,m,dT.getUTCDate()))),7],
+    ["10 ans",dateToSerial(new Date(Date.UTC(y-10,m,dT.getUTCDate()))),10],
   ];
 }
+function annRet(v,yrs){return v==null?null:Math.pow(1+v,1/yrs)-1}
 function computePerf(){
   const P=S.perf;if(!P||!P.dates.length)return null;
   const T=P.dates[P.dates.length-1];
@@ -1034,24 +1040,24 @@ function renderRecap(C){
   let perfHtml;
   if(pf){
     const cols=["","BGCB P EUR",...(hasEst?["BGCB estimé"]:[]),"FTSE Glb Focus €-H","SPX","NDX","US Focus Parity","SXXR","NKY","Russell 2000","Glb Focus Parity","Moy. concurrents",...PERF_COMPS];
-    const rowFor=labels=>pf.HOR.map(([h,ref])=>[h,...labels.map(l=>{
-      const v=perfValue(pf,l,ref);
-      return {t:l==="BGCB P EUR"||l==="BGCB estimé"?"<b>"+P(v)+"</b>":P(v),cls:cls(v)};
-    })]);
+    const pCell=(v,yrs,bold)=>({t:(bold?"<b>"+P(v)+"</b>":P(v))+(yrs&&v!=null?' <small style="color:var(--mut)">'+P(annRet(v,yrs))+" p.a.</small>":""),cls:cls(v)});
+    const rowFor=labels=>pf.HOR.map(([h,ref,yrs])=>[h,...labels.map(l=>
+      pCell(perfValue(pf,l,ref),yrs,l==="BGCB P EUR"||l==="BGCB estimé"))]);
     perfHtml=`<div class="panel"><h2>1. Official Performance</h2>
       <div class="note">niveaux quotidiens du data loader (snapshot du <b>${esc(pf.asof)}</b>), lookup à la dernière date disponible ≤ cible.
-      WTD = depuis le vendredi précédent (= rolling week quand on calcule un vendredi). NAV des concurrents parfois publiées en retard → dernière valeur connue.${estNote}</div>
+      WTD = depuis le vendredi précédent (= rolling week quand on calcule un vendredi). NAV des concurrents parfois publiées en retard → dernière valeur connue.
+      Horizons 3/5/7/10 ans : perf <b>cumulée</b>, suivie de l'annualisée (« p.a. ») — « · » si l'historique du hub ne remonte pas assez loin.${estNote}</div>
       ${sT(cols,rowFor(cols.slice(1)))}
       <h2 style="margin-top:16px">1b. Focus CB régionaux EUR-hedged &amp; MSCI World</h2>
-      ${sT(["",...Object.keys(PERF_REGIONAL)],pf.HOR.map(([h,ref])=>[h,...Object.keys(PERF_REGIONAL).map(l=>{
-        const v=perfValue(pf,l,ref);return {t:P(v),cls:cls(v)};
-      })]))}
+      ${sT(["",...Object.keys(PERF_REGIONAL)],pf.HOR.map(([h,ref,yrs])=>[h,...Object.keys(PERF_REGIONAL).map(l=>
+        pCell(perfValue(pf,l,ref),yrs))]))}
     </div>`;
   }else if(hasEst){
     const HOR=perfHorizons(S.pnlEst.dates[S.pnlEst.dates.length-1]);
     perfHtml=`<div class="panel"><h2>1. Official Performance — estimé seul</h2>
       <div class="note">pas d'onglet « hub in value » dans le data loader déposé → seul l'estimé PnL Misys est disponible.${estNote}</div>
-      ${sT(["","BGCB estimé"],HOR.map(([h,ref])=>{const v=pnlEstRet(ref);return [h,{t:"<b>"+P(v)+"</b>",cls:cls(v)}]}))}
+      ${sT(["","BGCB estimé"],HOR.filter(([,ref,yrs])=>!yrs||pnlEstRet(ref)!=null).map(([h,ref,yrs])=>{const v=pnlEstRet(ref);
+        return [h,{t:"<b>"+P(v)+"</b>"+(yrs&&v!=null?' <small style="color:var(--mut)">'+P(annRet(v,yrs))+" p.a.</small>":""),cls:cls(v)}]}))}
     </div>`;
   }else{
     perfHtml='<div class="panel">'+off(1,"Official Performance","non calculable — déposer le data loader avec son onglet « hub in value » (snapshot des niveaux quotidiens), et la PnL Followers pour l'estimé.")+"</div>";
@@ -1491,12 +1497,19 @@ function exportXls(){
   if(pfx){
     const labs=["BGCB P EUR",...(S.pnlEst&&S.pnlEst.dates.length?["BGCB estimé"]:[]),"FTSE Glb Focus €-H","SPX","NDX","US Focus Parity","SXXR","NKY","Russell 2000","Glb Focus Parity","Moy. concurrents",...PERF_COMPS];
     const pv=(l,ref)=>{const v=perfValue(pfx,l,ref);return v==null?null:R(v*100,2)};
+    const pvAnn=(l,ref,yrs)=>{const v=annRet(perfValue(pfx,l,ref),yrs);return v==null?null:R(v*100,2)};
     push("1. Official Performance (%, niveaux du "+pfx.asof+")",...labs);
-    for(const [h,ref] of pfx.HOR)push(h,...labs.map(l=>pv(l,ref)));
+    for(const [h,ref,yrs] of pfx.HOR){
+      push(h+(yrs?" (cumulé)":""),...labs.map(l=>pv(l,ref)));
+      if(yrs)push(h+" p.a.",...labs.map(l=>pvAnn(l,ref,yrs)));
+    }
     push();
     const regs=Object.keys(PERF_REGIONAL);
     push("1b. Focus CB régionaux EUR-hedged (%)",...regs);
-    for(const [h,ref] of pfx.HOR)push(h,...regs.map(l=>pv(l,ref)));
+    for(const [h,ref,yrs] of pfx.HOR){
+      push(h+(yrs?" (cumulé)":""),...regs.map(l=>pv(l,ref)));
+      if(yrs)push(h+" p.a.",...regs.map(l=>pvAnn(l,ref,yrs)));
+    }
     push();
   }
   const oux=S.pnlEst?computeOverUnder(C,rc):null;
