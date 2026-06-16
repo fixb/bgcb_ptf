@@ -32,6 +32,11 @@ header{border-bottom:1px solid var(--line);padding:18px 0 14px;display:flex;flex
 #exportBtn:hover,#packBtn:hover{background:var(--amber2);color:#04101f}
 #exportBtn:focus-visible,#packBtn:focus-visible{outline:1px solid var(--amber);outline-offset:1px}
 #packBtn[disabled]{opacity:.55;cursor:progress}
+#cashCtl{display:none;align-items:baseline;gap:6px;color:var(--mut);font-size:11.5px;letter-spacing:.04em}
+#cashCtl b{color:var(--amber);font-weight:600}
+#cashInp{font-family:var(--mono);width:62px;background:var(--panel2);border:1px solid var(--line2);color:var(--ink);padding:6px 8px;font-size:12px;border-radius:3px;text-align:right}
+#cashInp:focus{outline:1px solid var(--amber2)}
+#cashInp.set{border-color:var(--amber2);color:var(--amber)}
 
 /* ---------- file chips ---------- */
 #filebar{display:flex;flex-wrap:wrap;gap:10px;padding:14px 0;border-bottom:1px solid var(--line)}
@@ -133,6 +138,7 @@ svg text{font-family:var(--mono)}
   <div class="asof" id="asof"></div>
   <button id="exportBtn" title="Exporter toutes les vues en classeur Excel">⤓ Export XLS</button>
   <button id="packBtn" title="Classeur autonome à envoyer à l'IC : il pourra le ré-uploader pour retrouver l'analyse complète">⤓ Pack IC</button>
+  <label id="cashCtl" title="Cash disponible en % de l'AUM — saisie manuelle, écrase la valeur auto et est incluse dans le Pack IC">cash <input id="cashInp" type="number" step="0.1" min="0" placeholder="auto"> %</label>
 </header>
 
 <div id="filebar">
@@ -383,6 +389,7 @@ function parseBiff8(stream){
 /* ======================= modèles de données ======================= */
 const S={rr:null,rr2:null,f:null,fPrev:null,g:null,transco:null,perf:null,pnlEst:null,date:null,withOverlay:true,
   files:{}, // octets bruts des sources chargées (clé = nom minuscule) → bundle IC
+  cashLevel:null, // cash disponible (% AUM en fraction) saisi manuellement — override de la valeur auto
   betaCfg:{bench:"Global Focus Hedged Parity (EUR)",win:90,mode:"flat",hl:30}};
 
 function parseFtseRows(rows){
@@ -916,6 +923,7 @@ function render(){
   const C=S.calc;if(!C)return;
   $("#empty").style.display="none";$("#app").style.display="block";
   $("#exportBtn").style.display="inline-block";$("#packBtn").style.display="inline-block";
+  syncCashInput(C);
   $("#asof").innerHTML=S.rr.date?("risk report du <b>"+S.rr.date+"</b> · indices : séance du <b>"+(S.date||"…")+"</b>"):"";
 
   /* ---- KPIs ---- */
@@ -1024,8 +1032,9 @@ function computeRecap(C){
     {m:"Prime de conversion pondérée par l'AV",pf:C.pf.premium,ix:C.fStat.premium,d:1,u:" %"},
     {m:"Vol implicite pondérée par l'AV",pf:C.pf.ivol,ix:C.fStat.ivol,d:1,u:" %"},
   ];
-  const cashAv=C.ovlCash.reduce((a,p)=>a+p.av,0)/aum;
-  return {aum,cashAv,rows,tot,topUnd,topStress,topDefault,greeks};
+  const cashAuto=C.ovlCash.reduce((a,p)=>a+p.av,0)/aum;
+  const cashAv=S.cashLevel!=null?S.cashLevel:cashAuto; // override manuel prioritaire
+  return {aum,cashAv,cashAuto,cashManual:S.cashLevel!=null,rows,tot,topUnd,topStress,topDefault,greeks};
 }
 
 function renderRecap(C){
@@ -1096,7 +1105,7 @@ function renderRecap(C){
   <div class="panel">
     <h2>Weekly Call BGCB — récapitulatif</h2>
     <div class="note">réplique de l'onglet <i>Summary</i> du classeur hebdo, recalculée depuis le risk report Sophis + indices FTSE + data loader.
-    AUM <b>${fmt.m(C.aum)}</b> · cash disponible <b>${P(r.cashAv)}</b> · risk report du <b>${esc(S.rr.date||"…")}</b> · indices : séance du <b>${esc(S.date||"…")}</b>.</div>
+    AUM <b>${fmt.m(C.aum)}</b> · cash disponible <b>${P(r.cashAv)}</b>${r.cashManual?' <span style="color:var(--amber)">(saisi — auto '+P(r.cashAuto)+")</span>":""} · risk report du <b>${esc(S.rr.date||"…")}</b> · indices : séance du <b>${esc(S.date||"…")}</b>.</div>
     ${C.pf.noTransco.length?'<div class="note" style="color:var(--amber);margin-bottom:0">⚠ Transco MACE ID ↔ nom Mysis manquante pour '+C.pf.noTransco.length+' souche(s) : <b>'+esc(C.pf.noTransco.join(", "))+"</b> — à ajouter dans l'onglet CBs du data loader (ces souches sont traitées comme hors indices dans tous les calculs).</div>":""}
   </div>
   ${perfHtml}
@@ -1520,6 +1529,10 @@ async function buildBundleSheet(){
     const f=S.files[k];
     payload+="~F|"+b64enc(_enc.encode(f.name))+"|"+b64enc(await deflateRaw(f.u8));
   }
+  // état saisi manuellement (hors fichiers source) — ex. cash level
+  const meta={};
+  if(S.cashLevel!=null)meta.cashLevel=S.cashLevel;
+  if(Object.keys(meta).length)payload+="~M|"+b64enc(_enc.encode(JSON.stringify(meta)));
   let x='<Worksheet ss:Name="BGCB_BUNDLE"><Table>';
   const CH=30000; // < limite 32 767 car. par cellule Excel
   for(let i=0;i<payload.length;i+=CH)
@@ -1535,14 +1548,17 @@ async function importBundle(text){
   for(const m of slice.matchAll(/<Data ss:Type="String">([^<]*)<\/Data>/g))payload+=m[1];
   const recs=payload.split("~");
   if(recs[0]!=="BGCB_BUNDLE_V1"){markErr("bundle","format de bundle inconnu");return}
-  let n=0;
+  let n=0,meta=null;
   for(let k=1;k<recs.length;k++){
     const r=recs[k];if(!r)continue;
+    if(r[0]==="M"){try{meta=JSON.parse(_dec.decode(b64dec(r.slice(2))))}catch(e){}continue}
     const p1=r.indexOf("|"),p2=r.indexOf("|",p1+1);
     const fname=_dec.decode(b64dec(r.slice(p1+1,p2)));
     const u8=await inflateRaw(b64dec(r.slice(p2+1)));
     await loadRaw(fname,u8);n++;
   }
+  if(meta&&meta.cashLevel!=null)S.cashLevel=meta.cashLevel; // restaure le cash saisi
+  if(S.calc)render();
   if(!n)markErr("bundle","aucun fichier dans le bundle");
 }
 
@@ -1742,6 +1758,23 @@ $("#packBtn").addEventListener("click",async()=>{
   const b=$("#packBtn");b.disabled=true;const lab=b.textContent;b.textContent="… empaquetage";
   try{await exportXls(true)}catch(e){console.error(e);markErr("pack IC",e.message)}
   finally{b.disabled=false;b.textContent=lab}
+});
+// saisie manuelle du cash disponible (% AUM) — override de la valeur auto, embarqué dans le Pack IC
+function syncCashInput(C){
+  const inp=$("#cashInp");if(!inp)return;
+  $("#cashCtl").style.display="inline-flex";
+  if(document.activeElement!==inp){
+    inp.value=S.cashLevel!=null?(S.cashLevel*100).toFixed(2).replace(/\.?0+$/,""):"";
+    const auto=C&&C.aum?C.ovlCash.reduce((a,p)=>a+p.av,0)/C.aum:null;
+    inp.placeholder=auto!=null?(auto*100).toFixed(1):"auto";
+  }
+  inp.classList.toggle("set",S.cashLevel!=null);
+}
+$("#cashInp").addEventListener("change",e=>{
+  const v=e.target.value.trim();
+  S.cashLevel=v===""?null:(parseFloat(v.replace(",","."))/100);
+  if(S.cashLevel!=null&&!isFinite(S.cashLevel))S.cashLevel=null;
+  if(S.calc)render();
 });
 
 /* ======================= chargement fichiers ======================= */
