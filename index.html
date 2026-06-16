@@ -28,9 +28,10 @@ header{border-bottom:1px solid var(--line);padding:18px 0 14px;display:flex;flex
 .sub{color:var(--mut);font-size:11.5px;letter-spacing:.04em}
 .asof{margin-left:auto;color:var(--mut);font-size:11.5px}
 .asof b{color:var(--ink)}
-#exportBtn{display:none;font-family:var(--mono);font-size:11.5px;letter-spacing:.04em;background:var(--panel2);color:var(--amber);border:1px solid var(--amber2);border-radius:4px;padding:7px 13px;cursor:pointer;transition:background .15s,color .15s}
-#exportBtn:hover{background:var(--amber2);color:#04101f}
-#exportBtn:focus-visible{outline:1px solid var(--amber);outline-offset:1px}
+#exportBtn,#packBtn{display:none;font-family:var(--mono);font-size:11.5px;letter-spacing:.04em;background:var(--panel2);color:var(--amber);border:1px solid var(--amber2);border-radius:4px;padding:7px 13px;cursor:pointer;transition:background .15s,color .15s}
+#exportBtn:hover,#packBtn:hover{background:var(--amber2);color:#04101f}
+#exportBtn:focus-visible,#packBtn:focus-visible{outline:1px solid var(--amber);outline-offset:1px}
+#packBtn[disabled]{opacity:.55;cursor:progress}
 
 /* ---------- file chips ---------- */
 #filebar{display:flex;flex-wrap:wrap;gap:10px;padding:14px 0;border-bottom:1px solid var(--line)}
@@ -131,6 +132,7 @@ svg text{font-family:var(--mono)}
   <div class="sub">portefeuille vs FTSE Global Focus Index &amp; FTSE Global Index</div>
   <div class="asof" id="asof"></div>
   <button id="exportBtn" title="Exporter toutes les vues en classeur Excel">⤓ Export XLS</button>
+  <button id="packBtn" title="Classeur autonome à envoyer à l'IC : il pourra le ré-uploader pour retrouver l'analyse complète">⤓ Pack IC</button>
 </header>
 
 <div id="filebar">
@@ -380,6 +382,7 @@ function parseBiff8(stream){
 
 /* ======================= modèles de données ======================= */
 const S={rr:null,rr2:null,f:null,fPrev:null,g:null,transco:null,perf:null,pnlEst:null,date:null,withOverlay:true,
+  files:{}, // octets bruts des sources chargées (clé = nom minuscule) → bundle IC
   betaCfg:{bench:"Global Focus Hedged Parity (EUR)",win:90,mode:"flat",hl:30}};
 
 function parseFtseRows(rows){
@@ -911,7 +914,8 @@ function ladderRow(who,dist,wd,isPf){
 /* ======================= rendu des sections ======================= */
 function render(){
   const C=S.calc;if(!C)return;
-  $("#empty").style.display="none";$("#app").style.display="block";$("#exportBtn").style.display="inline-block";
+  $("#empty").style.display="none";$("#app").style.display="block";
+  $("#exportBtn").style.display="inline-block";$("#packBtn").style.display="inline-block";
   $("#asof").innerHTML=S.rr.date?("risk report du <b>"+S.rr.date+"</b> · indices : séance du <b>"+(S.date||"…")+"</b>"):"";
 
   /* ---- KPIs ---- */
@@ -1500,7 +1504,49 @@ function xlsSheet(name,cols,rows){
   for(const r of rows)x+='<Row>'+r.map(xlsCell).join("")+'</Row>';
   return x+'</Table></Worksheet>';
 }
-function exportXls(){
+/* ---- bundle IC : octets bruts des sources compressés (deflate-raw) + base64 ---- */
+async function deflateRaw(u8){
+  const cs=new CompressionStream("deflate-raw");
+  const out=await new Response(new Blob([u8]).stream().pipeThrough(cs)).arrayBuffer();
+  return new Uint8Array(out);
+}
+function b64enc(u8){let s="";const C=0x8000;for(let i=0;i<u8.length;i+=C)s+=String.fromCharCode.apply(null,u8.subarray(i,i+C));return btoa(s)}
+function b64dec(b){const s=atob(b),u=new Uint8Array(s.length);for(let i=0;i<s.length;i++)u[i]=s.charCodeAt(i);return u}
+const _enc=new TextEncoder(), _dec=new TextDecoder();
+// payload : "BGCB_BUNDLE_V1" puis, par fichier, "~F|<b64(nom)>|<b64(deflate(octets))>" — alphabet base64 sans ~ | < > & "
+async function buildBundleSheet(){
+  let payload="BGCB_BUNDLE_V1";
+  for(const k in S.files){
+    const f=S.files[k];
+    payload+="~F|"+b64enc(_enc.encode(f.name))+"|"+b64enc(await deflateRaw(f.u8));
+  }
+  let x='<Worksheet ss:Name="BGCB_BUNDLE"><Table>';
+  const CH=30000; // < limite 32 767 car. par cellule Excel
+  for(let i=0;i<payload.length;i+=CH)
+    x+='<Row><Cell><Data ss:Type="String">'+payload.slice(i,i+CH)+'</Data></Cell></Row>';
+  return x+'</Table></Worksheet>';
+}
+async function importBundle(text){
+  const i=text.indexOf('ss:Name="BGCB_BUNDLE"');
+  const j=text.indexOf('</Worksheet>',i);
+  if(i<0||j<0){markErr("bundle","feuille BGCB_BUNDLE introuvable");return}
+  const slice=text.slice(i,j);
+  let payload="";
+  for(const m of slice.matchAll(/<Data ss:Type="String">([^<]*)<\/Data>/g))payload+=m[1];
+  const recs=payload.split("~");
+  if(recs[0]!=="BGCB_BUNDLE_V1"){markErr("bundle","format de bundle inconnu");return}
+  let n=0;
+  for(let k=1;k<recs.length;k++){
+    const r=recs[k];if(!r)continue;
+    const p1=r.indexOf("|"),p2=r.indexOf("|",p1+1);
+    const fname=_dec.decode(b64dec(r.slice(p1+1,p2)));
+    const u8=await inflateRaw(b64dec(r.slice(p2+1)));
+    await loadRaw(fname,u8);n++;
+  }
+  if(!n)markErr("bundle","aucun fichier dans le bundle");
+}
+
+async function exportXls(bundle){
   const C=S.calc;if(!C)return;
   const statusLab=st=>st==="focus"?"Global Focus":st==="broad"?"Global":st==="notr"?"Transco manquante":"Hors indice";
 
@@ -1677,43 +1723,61 @@ function exportXls(){
   const alloc=xlsSheet("Allocation région",
     ["Région","Δ cash CB","Δ cash overlay","Δ cash net","% AUM"],allocRows);
 
+  const bundleSheet=bundle?await buildBundleSheet():"";
   const xml='<?xml version="1.0"?>\n<?mso-application progid="Excel.Sheet"?>\n'
     +'<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">'
     +'<Styles><Style ss:ID="hdr"><Font ss:Bold="1"/><Interior ss:Color="#DDDDDD" ss:Pattern="Solid"/></Style></Styles>'
-    +recap+synthese+weights+credit+recon+overlay+universe+alloc+'</Workbook>';
+    +recap+synthese+weights+credit+recon+overlay+universe+alloc+bundleSheet+'</Workbook>';
 
   const blob=new Blob(["﻿"+xml],{type:"application/vnd.ms-excel"});
   const url=URL.createObjectURL(blob);
   const d=(S.rr&&S.rr.date?S.rr.date:"").replace(/\//g,"-");
   const a=document.createElement("a");
-  a.href=url;a.download="BGCB_index_compare"+(d?"_"+d:"")+".xls";
+  a.href=url;a.download="BGCB_index_compare"+(bundle?"_IC":"")+(d?"_"+d:"")+".xls";
   document.body.appendChild(a);a.click();a.remove();
   setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
-$("#exportBtn").addEventListener("click",exportXls);
+$("#exportBtn").addEventListener("click",()=>exportXls(false));
+$("#packBtn").addEventListener("click",async()=>{
+  const b=$("#packBtn");b.disabled=true;const lab=b.textContent;b.textContent="… empaquetage";
+  try{await exportXls(true)}catch(e){console.error(e);markErr("pack IC",e.message)}
+  finally{b.disabled=false;b.textContent=lab}
+});
 
 /* ======================= chargement fichiers ======================= */
 async function handleFile(file){
-  const name=file.name.toLowerCase();
-  const buf=await file.arrayBuffer();
+  const ab=await file.arrayBuffer();
+  // un classeur « Pack IC » (SpreadsheetML porteur du bundle) → ré-import des sources embarquées
+  const head=_dec.decode(new Uint8Array(ab,0,Math.min(ab.byteLength,256)));
+  if(head.includes('progid="Excel.Sheet"')){
+    const text=_dec.decode(new Uint8Array(ab));
+    if(text.includes('ss:Name="BGCB_BUNDLE"')){await importBundle(text);return}
+  }
+  await loadRaw(file.name,new Uint8Array(ab));
+}
+// parse un fichier source (octets bruts) et l'enregistre pour le bundle IC
+async function loadRaw(fname,u8){
+  const name=fname.toLowerCase();
+  const buf=u8.buffer.slice(u8.byteOffset,u8.byteOffset+u8.byteLength);
+  let ok=true;
   try{
     if(/ucbindex0204/.test(name)){
       const map=parseFtseRows(parseBiff8(ole2Stream(buf,["Workbook","Book"])));
       const m=name.match(/(\d{4})(\d{2})(\d{2})/);  // date de génération, en préfixe ou en suffixe
       if(m){map.fileDate=dateToSerial(new Date(Date.UTC(+m[1],+m[2]-1,+m[3])));map.sessionDate=prevBusinessDay(map.fileDate)}
-      assignFtse0204(map,file.name);
+      assignFtse0204(map,fname);
       extractDate(name,true);
     }
-    else if(/ucbindex0001/.test(name)){S.g=parseFtseRows(parseBiff8(ole2Stream(buf,["Workbook","Book"])));mark("g",file.name);extractDate(name,false)}
+    else if(/ucbindex0001/.test(name)){S.g=parseFtseRows(parseBiff8(ole2Stream(buf,["Workbook","Book"])));mark("g",fname);extractDate(name,false)}
     else if(/pnl/.test(name)&&name.endsWith(".xlsx")){
       const E=parsePnlFollowers(await readXlsxSheet(buf,"BGCB"));
-      S.pnlEst=E;mark("pnl",file.name+" ("+E.dates.length+" jours, jusqu'au "+frDate(E.dates[E.dates.length-1])+")");
+      S.pnlEst=E;mark("pnl",fname+" ("+E.dates.length+" jours, jusqu'au "+frDate(E.dates[E.dates.length-1])+")");
     }
     else if(/risk_report|risk report/.test(name)||name.endsWith(".xlsx")){
-      try{assignRiskReport(parseRiskReport(await readXlsxSheet(buf,"BGCB Portfolio")),file.name)}
+      try{assignRiskReport(parseRiskReport(await readXlsxSheet(buf,"BGCB Portfolio")),fname)}
       catch(e){ // pas un risk report : tenter la PnL Followers (feuille BGCB)
         const E=parsePnlFollowers(await readXlsxSheet(buf,"BGCB"));
-        S.pnlEst=E;mark("pnl",file.name+" ("+E.dates.length+" jours, jusqu'au "+frDate(E.dates[E.dates.length-1])+")");
+        S.pnlEst=E;mark("pnl",fname+" ("+E.dates.length+" jours, jusqu'au "+frDate(E.dates[E.dates.length-1])+")");
       }
     }
     else if(name.endsWith(".xlsm")){
@@ -1724,13 +1788,14 @@ async function handleFile(file){
         const P=parsePerfHub(await readXlsxSheet(buf,"hub in value"));
         if(P.dates.length){S.perf=P;perfInfo=" · hub perf "+P.dates.length+" dates"}
       }catch(e){/* pas d'onglet « hub in value » dans ce fichier */}
-      if(Object.keys(t).length){S.transco=t;mark("tr",file.name+" ("+Object.keys(t).length+" lignes"+perfInfo+")")}
+      if(Object.keys(t).length){S.transco=t;mark("tr",fname+" ("+Object.keys(t).length+" lignes"+perfInfo+")")}
     }
     else if(name.endsWith(".xls")){ // UCBINDEX renommé ? tenter par contenu
       const rows=parseFtseRows(parseBiff8(ole2Stream(buf,["Workbook","Book"])));
-      if(!S.f){S.f=rows;mark("f",file.name)}else{S.g=rows;mark("g",file.name)}
+      if(!S.f){S.f=rows;mark("f",fname)}else{S.g=rows;mark("g",fname)}
     }
-  }catch(e){console.error(e);markErr(file.name,e.message)}
+  }catch(e){console.error(e);markErr(fname,e.message);ok=false}
+  if(ok&&/\.(xls|xlsx|xlsm)$/.test(name))S.files[name]={name:fname,u8}; // mémorise la source brute pour le Pack IC
   build();
 }
 function extractDate(name,primary){ // fichier généré le jour J → données de la séance du jour ouvré précédent
