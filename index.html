@@ -701,11 +701,12 @@ function computeOverUnder(C,rc){
   }
   const books=Object.values(byBook).map(x=>({...x,contrib:x.pnl/aum})).sort((a,b)=>b.contrib-a.contrib);
   const estRet=pnlEstRet(ref);
-  let regions=null,bmTot=null,total=null,unexp=null;
+  let regions=null,bmTot=null,total=null,unexp=null,offRet=null,totalFinal=null,gap=null,unexpFinal=null;
   if(S.perf){
     const rbet=name=>{const a=perfLevelAt(S.perf,name,ref),v=perfLevelAt(S.perf,name,T);
       return (a!=null&&a!==0&&v!=null)?v/a-1:null};
     bmTot=rbet("FTSE Global Focus EUR-Hedged");
+    offRet=rbet(PERF_SERIES["BGCB P EUR"]);   // perf officielle (NAV) sur la même fenêtre ref → T
     const contribR={};let unmapped=0;
     for(const x of books){
       const reg=bookRegion(x.book,x.st,C);
@@ -719,10 +720,14 @@ function computeOverUnder(C,rc){
       return {k,alloc,sel,tot:(alloc!=null&&sel!=null)?alloc+sel:null};
     });
     regions.push({k:"Non mappé / central",alloc:0,sel:unmapped,tot:unmapped});
+    const sumReg=regions.reduce((a,z)=>a+(z.tot||0),0);
     total=(estRet!=null&&bmTot!=null)?estRet-bmTot:null;
-    unexp=total!=null?total-regions.reduce((a,z)=>a+(z.tot||0),0):null;
+    unexp=total!=null?total-sumReg:null;
+    totalFinal=(offRet!=null&&bmTot!=null)?offRet-bmTot:null;        // over/under sur perf finale
+    gap=(offRet!=null&&estRet!=null)?offRet-estRet:null;             // écart estimé → final
+    unexpFinal=totalFinal!=null?totalFinal-sumReg:null;             // résidu vs perf finale (inclut l'écart d'estimation)
   }
-  return {ref,T,aum,books,estRet,bmTot,regions,total,unexp};
+  return {ref,T,aum,books,estRet,bmTot,offRet,regions,total,unexp,totalFinal,gap,unexpFinal};
 }
 const PERF_SERIES={"BGCB P EUR":"BG CB I-EUR","FTSE Glb Focus €-H":"FTSE Global Focus EUR-Hedged",
   "SPX":"SPX","NDX":"NDX","US Focus Parity":"US Focus Hedged Parity (USD)","SXXR":"SXXR","NKY":"NIKKEI",
@@ -1084,13 +1089,17 @@ function renderRecap(C){
     const movers=[...ou.books].sort((a,x)=>Math.abs(x.contrib)-Math.abs(a.contrib)).slice(0,12).sort((a,x)=>x.contrib-a.contrib);
     ouHtml=`<div class="grid2">
     <div class="panel"><h2>2. Over/Under Performance (estimé Misys) vs benchmark</h2>
-      <div class="note">rolling week du <b>${esc(frDate(ou.ref))}</b> au <b>${esc(frDate(ou.T))}</b> — sur/sous-perf totale
-      <b class="${cls(ou.total)}">${P2(ou.total)}</b> (estimé ${P2(ou.estRet)} − benchmark ${P2(ou.bmTot)}).
-      Attribution Brinson-Fachler vs Focus régionaux EUR-hedged ; mapping book → région par rapprochement avec le risk report (repli : stratégie).</div>
+      <div class="note">rolling week du <b>${esc(frDate(ou.ref))}</b> au <b>${esc(frDate(ou.T))}</b> — sur/sous-perf <b>estimée</b>
+      <b class="${cls(ou.total)}">${P2(ou.total)}</b> (estimé ${P2(ou.estRet)} − benchmark ${P2(ou.bmTot)}).${ou.totalFinal!=null?`
+      Sur <b>perf finale</b> (NAV officielle) <b class="${cls(ou.totalFinal)}">${P2(ou.totalFinal)}</b> (officiel ${P2(ou.offRet)} − benchmark ${P2(ou.bmTot)}) · écart estimé → final <b class="${cls(ou.gap)}">${P2(ou.gap)}</b>.`:""}
+      Attribution Brinson-Fachler vs Focus régionaux EUR-hedged (décompo basée sur l'estimé — seule source granulaire) ; mapping book → région par rapprochement avec le risk report (repli : stratégie).</div>
       ${ou.regions?sT(["Région","Allocation","Sélection","Total"],[
         ...ou.regions.map(z=>[esc(z.k),{t:P2(z.alloc),cls:cls(z.alloc)},{t:P2(z.sel),cls:cls(z.sel)},{t:P2(z.tot),cls:cls(z.tot)}]),
         [b("Total effets"),{t:b(P2(sums.al)),cls:cls(sums.al)},{t:b(P2(sums.se)),cls:cls(sums.se)},{t:b(P2(sums.to)),cls:cls(sums.to)}],
-        ["Non expliqué (résidu)",null,null,{t:P2(ou.unexp),cls:"mut"}]])
+        ["Non expliqué (estimé)",null,null,{t:P2(ou.unexp),cls:"mut"}],
+        ...(ou.totalFinal!=null?[
+          ["Écart estimé → perf finale",null,null,{t:P2(ou.gap),cls:cls(ou.gap)}],
+          [b("Non expliqué vs perf finale"),null,null,{t:b(P2(ou.unexpFinal)),cls:"mut"}]]:[])])
       :'<div class="note">hub perf absent — benchmark indisponible, seuls les contributeurs sont affichés.</div>'}
     </div>
     <div class="panel"><h2>Sélection — principaux contributeurs de la semaine</h2>
@@ -1620,13 +1629,19 @@ async function exportXls(bundle){
   }
   const oux=S.pnlEst?computeOverUnder(C,rc):null;
   if(oux){
-    push("2. Over/Under (estimé Misys) vs benchmark — rolling week "+frDate(oux.ref)+" → "+frDate(oux.T));
-    push("Sur/sous-performance totale (%)",oux.total==null?null:R(oux.total*100,3),
+    push("2. Over/Under vs benchmark — rolling week "+frDate(oux.ref)+" → "+frDate(oux.T));
+    push("Sur/sous-perf estimée (%)",oux.total==null?null:R(oux.total*100,3),
       "estimé",oux.estRet==null?null:R(oux.estRet*100,3),"benchmark",oux.bmTot==null?null:R(oux.bmTot*100,3));
+    if(oux.totalFinal!=null){
+      push("Sur/sous-perf finale (NAV officielle) (%)",R(oux.totalFinal*100,3),
+        "officiel",R(oux.offRet*100,3),"benchmark",R(oux.bmTot*100,3));
+      push("Écart estimé → final (%)",oux.gap==null?null:R(oux.gap*100,3));
+    }
     if(oux.regions){
-      push("Région","Allocation %","Sélection %","Total %");
+      push("Région (décompo estimé)","Allocation %","Sélection %","Total %");
       for(const z of oux.regions)push(z.k,z.alloc==null?null:R(z.alloc*100,3),z.sel==null?null:R(z.sel*100,3),z.tot==null?null:R(z.tot*100,3));
-      push("Non expliqué (résidu)",null,null,oux.unexp==null?null:R(oux.unexp*100,3));
+      push("Non expliqué (estimé)",null,null,oux.unexp==null?null:R(oux.unexp*100,3));
+      if(oux.totalFinal!=null)push("Non expliqué vs perf finale",null,null,oux.unexpFinal==null?null:R(oux.unexpFinal*100,3));
     }
     push();
     push("Principaux contributeurs (PnL semaine, % AUM)","Stratégie","Contribution %");
